@@ -3,6 +3,7 @@
  * every two seconds "[cluttertest] N frames in T ms = F fps" (frames counted at the stage's after-paint). CLUTTER_UNCAPPED: the master clock runs as fast as it can (frame rate 1000). */
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include <clutter/clutter.h>
 
 extern void phe_log (const char *msg);
@@ -69,6 +70,19 @@ uncap (gpointer data)
   return FALSE;
 }
 
+static gboolean steady;
+
+static gboolean
+steady_blur (gpointer data)
+{
+  (void) data;
+  steady = TRUE;                                           /* phase B2: the blurred actor slides instead of turning, so its paint box keeps one size */
+  clutter_actor_set_rotation_angle (blur, CLUTTER_Z_AXIS, 0);
+  LOG ("[cluttertest] --- phase B2: blurred actor slides (constant paint box) ---");
+  frames = 0; t0 = g_get_monotonic_time ();
+  return FALSE;
+}
+
 static gboolean
 no_blur (gpointer data)
 {
@@ -95,7 +109,10 @@ on_frame (ClutterTimeline *tl, gint msecs, gpointer data)
   gdouble a = msecs * 360.0 / 4000.0;
   (void) tl; (void) data;
   clutter_actor_set_rotation_angle (spin, CLUTTER_Z_AXIS, a);
-  clutter_actor_set_rotation_angle (blur, CLUTTER_Z_AXIS, -a);
+  if (steady)
+    clutter_actor_set_x (blur, 60 + 40 * (1 + sin (a * G_PI / 90.0)));
+  else
+    clutter_actor_set_rotation_angle (blur, CLUTTER_Z_AXIS, -a);
 }
 
 static ClutterContent *
@@ -140,7 +157,7 @@ phe_clutter_main (int width, int height)
   g_signal_connect (tl, "new-frame", G_CALLBACK (on_frame), NULL);
   g_signal_connect (stage, "after-paint", G_CALLBACK (after_paint), NULL);
   t0 = g_get_monotonic_time ();
-  if (!g_getenv ("CLUTTER_UNCAPPED")) { g_timeout_add_seconds (14, uncap, NULL); g_timeout_add_seconds (28, no_blur, NULL); g_timeout_add_seconds (42, one_quad, NULL); }          /* 14 s at the default 60 fps cap, then as fast as it goes */
+  if (!g_getenv ("CLUTTER_UNCAPPED")) { g_timeout_add_seconds (14, uncap, NULL); g_timeout_add_seconds (28, steady_blur, NULL); g_timeout_add_seconds (42, no_blur, NULL); g_timeout_add_seconds (56, one_quad, NULL); }          /* 14 s at the default 60 fps cap, then as fast as it goes */
   clutter_timeline_start (tl);
   clutter_actor_show (stage);
   LOG ("[cluttertest] stage shown, running");
