@@ -24,12 +24,67 @@ after_paint (ClutterActor *stage, gpointer data)
   }
 }
 
+/* proof that the two replaced stubs are real: the SGI libtess (GLU tessellator) and cairo's PNG writer / reader */
+extern void *gluNewTess (void);
+extern void gluDeleteTess (void *t);
+extern void gluTessCallback (void *t, unsigned which, void (*fn) ());
+extern void gluTessBeginPolygon (void *t, void *data);
+extern void gluTessEndPolygon (void *t);
+extern void gluTessBeginContour (void *t);
+extern void gluTessEndContour (void *t);
+extern void gluTessVertex (void *t, double *coords, void *data);
+static int tess_vertices, tess_begins;
+static void tess_vertex_cb (void *v) { (void) v; tess_vertices++; }
+static void tess_begin_cb (unsigned type) { (void) type; tess_begins++; }
+static void tess_end_cb (void) { }
+static void
+proof_tess_and_png (void)
+{
+  void *t = gluNewTess ();
+  static double poly[5][3] = { { 0, 0, 0 }, { 4, 0, 0 }, { 4, 4, 0 }, { 2, 1, 0 }, { 0, 4, 0 } };      /* a concave pentagon: 3 triangles */
+  int i;
+  cairo_surface_t *s, *r; cairo_status_t st; cairo_t *cr;
+  gluTessCallback (t, 100101, (void (*) ()) tess_vertex_cb);       /* GLU_TESS_VERTEX */
+  gluTessCallback (t, 100100, (void (*) ()) tess_begin_cb);        /* GLU_TESS_BEGIN */
+  gluTessCallback (t, 100102, (void (*) ()) tess_end_cb);          /* GLU_TESS_END */
+  gluTessBeginPolygon (t, NULL); gluTessBeginContour (t);
+  for (i = 0; i < 5; i++) gluTessVertex (t, poly[i], poly[i]);
+  gluTessEndContour (t); gluTessEndPolygon (t); gluDeleteTess (t);
+  LOG ("[cluttertest] libtess: a concave pentagon -> %d primitives, %d vertices", tess_begins, tess_vertices);
+  s = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, 64, 48);
+  cr = cairo_create (s); cairo_set_source_rgba (cr, 0.8, 0.2, 0.2, 0.9); cairo_arc (cr, 32, 24, 20, 0, 6.2832); cairo_fill (cr); cairo_destroy (cr);
+  st = cairo_surface_write_to_png (s, "c:/data/cluttertest-cairo.png");
+  r = cairo_image_surface_create_from_png ("c:/data/cluttertest-cairo.png");
+  LOG ("[cluttertest] cairo PNG: write status %d (%s), read back %dx%d (status %d)", (int) st, cairo_status_to_string (st), cairo_image_surface_get_width (r), cairo_image_surface_get_height (r), (int) cairo_surface_status (r));
+  cairo_surface_destroy (s); cairo_surface_destroy (r);
+}
+
 static gboolean
 uncap (gpointer data)
 {
   (void) data;
   clutter_set_default_frame_rate (1000);                  /* the master clock no longer waits for the next 1/60 s */
   LOG ("[cluttertest] --- uncapped (frame rate 1000) ---");
+  frames = 0; t0 = g_get_monotonic_time ();
+  return FALSE;
+}
+
+static gboolean
+no_blur (gpointer data)
+{
+  (void) data;
+  clutter_actor_clear_effects (blur);                      /* phase C: the second actor without the blur effect */
+  LOG ("[cluttertest] --- phase C: blur effect removed ---");
+  frames = 0; t0 = g_get_monotonic_time ();
+  return FALSE;
+}
+
+static gboolean
+one_quad (gpointer data)
+{
+  (void) data;
+  clutter_actor_hide (blur);                               /* phase D: one turning textured quad only */
+  LOG ("[cluttertest] --- phase D: one textured actor ---");
   frames = 0; t0 = g_get_monotonic_time ();
   return FALSE;
 }
@@ -66,6 +121,7 @@ phe_clutter_main (int width, int height)
   LOG ("[cluttertest] clutter_init (Clutter %d.%d.%d)", CLUTTER_MAJOR_VERSION, CLUTTER_MINOR_VERSION, CLUTTER_MICRO_VERSION);
   if (clutter_init (NULL, NULL) != CLUTTER_INIT_SUCCESS) { LOG ("[cluttertest] clutter_init failed"); return 1; }
   if (g_getenv ("CLUTTER_UNCAPPED")) clutter_set_default_frame_rate (1000);
+  proof_tess_and_png ();
   stage = clutter_stage_new ();
   clutter_actor_set_size (stage, width, height);
   clutter_actor_set_background_color (stage, &bg);
@@ -84,7 +140,7 @@ phe_clutter_main (int width, int height)
   g_signal_connect (tl, "new-frame", G_CALLBACK (on_frame), NULL);
   g_signal_connect (stage, "after-paint", G_CALLBACK (after_paint), NULL);
   t0 = g_get_monotonic_time ();
-  if (!g_getenv ("CLUTTER_UNCAPPED")) g_timeout_add_seconds (14, uncap, NULL);          /* 14 s at the default 60 fps cap, then as fast as it goes */
+  if (!g_getenv ("CLUTTER_UNCAPPED")) { g_timeout_add_seconds (14, uncap, NULL); g_timeout_add_seconds (28, no_blur, NULL); g_timeout_add_seconds (42, one_quad, NULL); }          /* 14 s at the default 60 fps cap, then as fast as it goes */
   clutter_timeline_start (tl);
   clutter_actor_show (stage);
   LOG ("[cluttertest] stage shown, running");
