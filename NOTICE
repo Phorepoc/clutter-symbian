@@ -1,0 +1,2 @@
+clutter-symbian: Clutter 1.26.4, Cogl 1.22.8 and json-glib 1.6.6 for Phorepoc OS. Our files (recipes, overlay, os/src) are BSD-2-Clause (LICENSE). The libraries (LGPL-2.1-or-later, texts in LICENSES/) are downloaded by recipes/pins.sh,
+never copied into this repository, and stay in replaceable libraries.
