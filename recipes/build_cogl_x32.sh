@@ -32,9 +32,9 @@ rm -f /wk/out/libcogl.a; ar rcs /wk/out/libcogl.a $O/*.o
 # the include tree Clutter and the other layers see: <cogl/cogl.h>, <cogl-pango/cogl-pango.h>, <cogl-path/cogl-path.h> (headers of the tarball + the generated ones)
 I=/wk/cogl-inc; rm -rf $I; mkdir -p $I/cogl $I/cogl-pango $I/cogl-path
 (cd $S/cogl && find . -name "*.h" -exec cp --parents {} $I/cogl \;); cp $O/cogl/*.h $I/cogl/; cp $S/cogl-pango/*.h $I/cogl-pango/; cp $S/cogl-path/*.h $I/cogl-path/; cp $O/cogl-path/*.h $I/cogl-path/
-FFX="$FF -I$I -I$S/cogl-pango -I$S/cogl-path -I$O/cogl-path"
+FFX="$FF -I$I -I$S/cogl-pango -I$S/cogl-path -I$S/cogl-path/tesselator -I$O/cogl-path"   # cogl-path/tesselator = the SGI libtess (the GLU tessellator, SGI Free Software License B) Cogl carries: gluNewTess ... compiled in, no stubs
 for d in cogl-pango cogl-path; do
-  for f in $S/$d/*.c $( [ $d = cogl-path ] && echo $O/cogl-path/cogl-path-enum-types.c ); do b=$d-$(basename $f .c); $CC $FFX -c $f -o $O/x_$b.o 2> $O/errs.$b || echo "FAIL $f"; done
+  for f in $S/$d/*.c $( [ $d = cogl-path ] && echo $O/cogl-path/cogl-path-enum-types.c $S/cogl-path/tesselator/*.c ); do b=$d-$(basename $f .c); $CC $FFX -c $f -o $O/x_$b.o 2> $O/errs.$b || echo "FAIL $f"; done
   rm -f /wk/out/lib$d.a; ar rcs /wk/out/lib$d.a $O/x_$d-*.o; echo "lib$d.a: $(ar t /wk/out/lib$d.a | wc -l) members"
 done
 cat $O/errs.* 2>/dev/null | grep -a "error" | cut -c1-200 | head -10
