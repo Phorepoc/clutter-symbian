@@ -39,7 +39,8 @@ namespace
 	CWsScreenDevice* gScreen;
 	RWindowGroup* gGroup;
 	TBool gUp;
-	TReq gEv, gRd, gSel, gWt;		// gWt: the window registry's watcher count (C4)
+	TReq gEv, gRd, gSel, gWt, gTm;	// gTm: the poll timeout (RTimer::HighRes)
+	RTimer gTimer;		// gWt: the window registry's watcher count (C4)
 	TInt gWtSeen = -1;
 	TThreadId gMainId;
 
@@ -128,6 +129,7 @@ extern "C" int phe_clws_init(void)
 	gGroup->EnableScreenChangeEvents();
 	gGroup->EnableFocusChangeEvents();
 	gMainId = RThread().Id();
+	if ((r = gTimer.CreateLocal()) != KErrNone) return r;
 	if (pipe(gIntr) != 0) return KErrGeneral;
 	fcntl(gIntr[0], F_SETFL, O_NONBLOCK);
 	pthread_t th;
@@ -321,11 +323,27 @@ extern "C" int phe_clws_poll(PheClwsPollFD* aFds, unsigned aN, int aTimeout)
 		gSel.Issue();
 		gSel.iSt = KRequestPending;
 		pthread_mutex_lock(&gMx);
-		gJobFds = fds; gJobN = n + 1; gJobTimeout = aTimeout; gJobSt = &gSel.iSt; gJobPosted = ETrue;
+		// The timeout is this thread's high-resolution timer, not the helper's poll: Open C's poll/select time out through
+		// RTimer::After (localif.cpp, as in the 2010 source), which runs on the 1/64 s user tick, so a 16 ms frame wait took 31 ms
+		// (the 33 fps ceiling, hildon-port.md 7.45). RTimer::HighRes runs on the nanokernel tick (1 ms here).
+		const TBool timed = aTimeout > 0;
+		if (timed)
+			{
+			gTm.Issue();
+			gTimer.HighRes(gTm.iSt, aTimeout * 1000);
+			}
+		gJobFds = fds; gJobN = n + 1; gJobTimeout = timed ? -1 : aTimeout; gJobSt = &gSel.iSt; gJobPosted = ETrue;
 		pthread_cond_signal(&gCv);
 		pthread_mutex_unlock(&gMx);
-		TReq* all[4] = { &gSel, &gEv, &gRd, &gWt };
-		WaitAny(all, gWt.iActive ? 4 : 3);
+		TReq* all[5] = { &gSel, &gEv, &gRd, &gWt, &gTm };
+		WaitAny(all, 5);
+		if (timed)
+			{
+			if (!gTm.Done())
+				gTimer.Cancel();
+			Settle(gTm);
+			gTm.iActive = EFalse;
+			}
 		if (!gSel.Done())
 			{
 			const char c = 1;
