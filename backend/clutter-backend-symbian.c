@@ -1135,6 +1135,15 @@ clutter_backend_symbian_dispose (GObject *gobject)
   G_OBJECT_CLASS (_clutter_backend_symbian_parent_class)->dispose (gobject);
 }
 
+/* user resize as clutter-backend-x11.c: the frame process resizes windows (the registry's resize action, hildon-port.md 7.64),
+   so clutter_stage_set_user_resizable must reach the stage window (Clutter ignores it without this feature) */
+static ClutterFeatureFlags
+clutter_backend_symbian_get_features (ClutterBackend *backend)
+{
+  return CLUTTER_FEATURE_STAGE_USER_RESIZE
+       | CLUTTER_BACKEND_CLASS (_clutter_backend_symbian_parent_class)->get_features (backend);
+}
+
 static void
 _clutter_backend_symbian_class_init (ClutterBackendSymbianClass *klass)
 {
@@ -1144,6 +1153,7 @@ _clutter_backend_symbian_class_init (ClutterBackendSymbianClass *klass)
   backend_class->stage_window_type = CLUTTER_TYPE_STAGE_SYMBIAN;
   backend_class->get_renderer = clutter_backend_symbian_get_renderer;
   backend_class->init_events = clutter_backend_symbian_init_events;
+  backend_class->get_features = clutter_backend_symbian_get_features;
 }
 
 static void
