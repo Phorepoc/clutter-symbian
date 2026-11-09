@@ -286,8 +286,18 @@ extern "C" void phe_decor_kill(int aId)
 			RProcess p;
 			if (p.Open(TProcessId(list[i].iOwner)) == KErrNone)
 				{
-				RDebug::Printf("[phedecor] window %d: killing its unresponsive owner (process %u)", aId, list[i].iOwner);
-				p.Kill(KErrNotReady);
+				// a classic app's window is published by phescreenpub (hildon-port.md 7.51.18): the owner is the publisher, not the
+				// app. The close action makes the publisher end the app (EndTask, then a kill after its 10 s grace time).
+				if (p.FileName().FindF(_L("phescreenpub")) >= 0)
+					{
+					const TInt r = phe_decor_action(aId, 1 /* EPheWinActClose */);
+					RDebug::Printf("[phedecor] window %d: not responding, published by phescreenpub: close action -> %d", aId, r);
+					}
+				else
+					{
+					RDebug::Printf("[phedecor] window %d: killing its unresponsive owner (process %u)", aId, list[i].iOwner);
+					p.Kill(KErrNotReady);
+					}
 				p.Close();
 				}
 			}
