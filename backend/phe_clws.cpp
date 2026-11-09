@@ -21,6 +21,8 @@
 #include <stdlib.h>
 
 #include "phe_clws.h"
+#include <fbs.h>
+#include "phewinreg.h"
 
 namespace
 	{
@@ -185,6 +187,13 @@ extern "C" void phe_clws_window_raise(void* aW, int aPriority)
 		static_cast<RWindow*>(aW)->SetOrdinalPosition(0);		// the window in front of its siblings (the app's other stages)
 	gGroup->SetOrdinalPosition(0, aPriority);
 	gWs.Flush();
+	// which group has the keys (WSERV gives them to the front group that accepts focus)
+	const TInt focus = gWs.GetFocusWindowGroup();
+	TBuf<64> name;
+	gWs.GetWindowGroupNameFromIdentifier(focus, name);
+	TBuf8<64> n8;
+	n8.Copy(name.Left(60));
+	RDebug::Printf("[clws] raised: our group %d (ordinal %d), focus group %d '%s'", gGroup->Identifier(), gGroup->OrdinalPosition(), focus, (const char*)n8.PtrZ());
 	}
 
 extern "C" void phe_clws_window_destroy(void* aW)
@@ -203,6 +212,9 @@ extern "C" int phe_clws_pending(void)
 static int Translate(const TWsEvent& aWs, PheClwsEvent* aEv)
 	{
 	memset(aEv, 0, sizeof *aEv);
+	static TInt traced;
+	if (traced < 12 && aWs.Type() != EEventPointer && aWs.Type() != EEventDragDrop)
+		RDebug::Printf("[clws] event %d (#%d)", aWs.Type(), ++traced);
 	aEv->time_ms = (unsigned)(aWs.Time().Int64() / 1000);
 	switch (aWs.Type())
 		{
@@ -321,4 +333,101 @@ extern "C" int phe_clws_poll(PheClwsPollFD* aFds, unsigned aN, int aTimeout)
 		}
 	if (fds != local) free(fds);
 	return result;
+	}
+
+// ======================================================================== the window registry (C4)
+
+static RPheWinReg gReg;
+static TBool gRegUp;
+struct TRegBitmap { TInt iId; CFbsBitmap* iBitmap; };
+static RArray<TRegBitmap> gRegBitmaps;
+
+static TInt RegConnect()
+	{
+	if (gRegUp)
+		return KErrNone;
+	if (RFbsSession::GetSession() == NULL)
+		{
+		const TInt r = RFbsSession::Connect();
+		if (r != KErrNone)
+			return r;
+		}
+	const TInt r = gReg.Connect();
+	gRegUp = r == KErrNone;
+	return r;
+	}
+
+static void FillInfo(TPheWinInfo& aInfo, const char* aTitle, int aType, int aX, int aY, int aW, int aH, unsigned aState)
+	{
+	aInfo.iType = aType;
+	aInfo.iGeometry = TRect(TPoint(aX, aY), TSize(aW, aH));
+	aInfo.iState = aState;
+	TPtrC8 t((const TUint8*)(aTitle ? aTitle : ""));
+	aInfo.iTitle.Copy(t.Left(aInfo.iTitle.MaxLength()));	// (UTF-8 bytes widened: titles are ASCII so far)
+	}
+
+extern "C" int phe_clws_reg_window(const char* aTitle, int aType, int aX, int aY, int aW, int aH, unsigned aState)
+	{
+	TInt r = RegConnect();
+	if (r != KErrNone)
+		return r;
+	TPheWinInfo info;
+	FillInfo(info, aTitle, aType, aX, aY, aW, aH, aState);
+	r = gReg.Register(info);
+	return r < 0 ? r : info.iId;
+	}
+
+extern "C" int phe_clws_reg_update(int aId, const char* aTitle, int aType, int aX, int aY, int aW, int aH, unsigned aState)
+	{
+	if (!gRegUp)
+		return KErrNotReady;
+	TPheWinInfo info;
+	info.iId = aId;
+	FillInfo(info, aTitle, aType, aX, aY, aW, aH, aState);
+	return gReg.Update(info);
+	}
+
+extern "C" int phe_clws_reg_content(int aId, int aW, int aH, const void* aPixels, int aStride, int aDx, int aDy, int aDw, int aDh)
+	{
+	if (!gRegUp)
+		return KErrNotReady;
+	TInt i = 0;
+	while (i < gRegBitmaps.Count() && gRegBitmaps[i].iId != aId)
+		++i;
+	if (i == gRegBitmaps.Count())
+		{
+		TRegBitmap b = { aId, new CFbsBitmap };
+		if (!b.iBitmap || gRegBitmaps.Append(b) != KErrNone)
+			{ delete b.iBitmap; return KErrNoMemory; }
+		}
+	CFbsBitmap* bmp = gRegBitmaps[i].iBitmap;
+	if (bmp->Handle() == 0 || bmp->SizeInPixels() != TSize(aW, aH))
+		{
+		// a new size = a new bitmap (the old handle stays valid for an importer until it duplicates the new one)
+		bmp->Reset();
+		const TInt r = bmp->Create(TSize(aW, aH), EColor16MAP);
+		if (r != KErrNone)
+			return r;
+		}
+	bmp->BeginDataAccess();
+	TUint8* dst = (TUint8*)bmp->DataAddress();
+	const TInt dstride = CFbsBitmap::ScanLineLength(aW, EColor16MAP);
+	for (TInt y = 0; y < aH; ++y)
+		Mem::Copy(dst + y * dstride, (const TUint8*)aPixels + y * aStride, aW * 4);
+	bmp->EndDataAccess(EFalse);
+	return gReg.Content(aId, bmp->Handle(), TRect(TPoint(aDx, aDy), TSize(aDw, aDh)));
+	}
+
+extern "C" void phe_clws_reg_remove(int aId)
+	{
+	if (!gRegUp)
+		return;
+	gReg.Remove(aId);
+	for (TInt i = 0; i < gRegBitmaps.Count(); ++i)
+		if (gRegBitmaps[i].iId == aId)
+			{
+			delete gRegBitmaps[i].iBitmap;
+			gRegBitmaps.Remove(i);
+			break;
+			}
 	}

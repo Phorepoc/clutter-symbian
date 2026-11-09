@@ -41,6 +41,15 @@ int  phe_clws_poll (PheClwsPollFD *fds, unsigned nfds, int timeout);   /* the GM
 void phe_clws_set_inner_poll (PheClwsPollFunc inner);       /* GLib's own poll (g_poll), used by the helper thread for the real descriptors */
 void phe_clws_log (const char *msg);
 
+/* the window registry (hildon-ui phewinreg, hildon-port.md C4): a stage's metadata and content for the frame process.
+   type = TPheWinType, state = EPheWin* flags of phewinreg.h. reg_window returns the id (> 0) or an error (< 0: no registry).
+   reg_content copies w x h premultiplied BGRA pixels (stride bytes per row) into the window's shared bitmap and returns
+   the number of watchers (0: nobody imports it, the caller may skip copying until one appears) or an error. */
+int phe_clws_reg_window (const char *title, int type, int x, int y, int w, int h, unsigned state);
+int phe_clws_reg_update (int id, const char *title, int type, int x, int y, int w, int h, unsigned state);
+int phe_clws_reg_content (int id, int w, int h, const void *pixels, int stride, int dx, int dy, int dw, int dh);
+void phe_clws_reg_remove (int id);
+
 #ifdef __cplusplus
 }
 #endif

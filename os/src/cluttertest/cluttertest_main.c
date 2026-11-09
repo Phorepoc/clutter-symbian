@@ -203,17 +203,91 @@ on_activate (ClutterActor *stage, gpointer data)
 
 extern void phe_clws_screen_size (int *w, int *h);
 
+/* ======================================================================== the frame side of the registry test (C4, "cluttertest frame")
+ * a helper thread blocks on the registry (phe_frame_next, cluttertest.cpp) and hands each imported window to the main loop,
+ * which shows it as a texture (ClutterImage) on this process's own small stage */
+extern int phe_frame_next (unsigned *seen, int *id, int *w, int *h, unsigned char **pixels, char *title, int title_len);
+extern void phe_frame_free (unsigned char *pixels);
+extern int phe_frame_spawn (void);
+extern int phe_is_frame (void);
+extern int phe_cmd_has (const char *word);
+
+typedef struct { int id, w, h; unsigned char *px; char title[64]; } FrameImport;
+static ClutterActor *frame_view;
+static int frame_imports;
+
+static gboolean
+frame_show (gpointer data)
+{
+  FrameImport *f = data;
+  ClutterContent *img = clutter_actor_get_content (frame_view);
+  GError *err = NULL;
+
+  if (clutter_image_set_data (CLUTTER_IMAGE (img), f->px, COGL_PIXEL_FORMAT_BGRA_8888_PRE, f->w, f->h, f->w * 4, &err))
+    {
+      if (frame_imports++ < 3 || frame_imports % 100 == 0)
+        LOG ("[cluttertest-frame] import #%d: window %d '%s' %dx%d as a texture, pixel(10,10) = %08x", frame_imports, f->id, f->title, f->w, f->h,
+             f->w > 10 && f->h > 10 ? ((unsigned *) f->px)[10 * f->w + 10] : 0);
+    }
+  else
+    LOG ("[cluttertest-frame] import failed: %s", err ? err->message : "?");
+  g_clear_error (&err);
+  phe_frame_free (f->px);
+  g_free (f);
+  return G_SOURCE_REMOVE;
+}
+
+static gpointer
+frame_thread (gpointer data)
+{
+  unsigned seen = 0;
+  (void) data;
+  for (;;)
+    {
+      FrameImport *f = g_new0 (FrameImport, 1);
+      int r = phe_frame_next (&seen, &f->id, &f->w, &f->h, &f->px, f->title, sizeof f->title);
+      if (r < 0) { LOG ("[cluttertest-frame] registry: %d", r); g_free (f); return NULL; }
+      if (r == 0) { g_free (f); continue; }
+      g_idle_add (frame_show, f);
+    }
+}
+
+static int
+frame_main (void)
+{
+  ClutterActor *stage;
+  ClutterColor bg = { 30, 30, 30, 255 };
+
+  if (clutter_init (NULL, NULL) != CLUTTER_INIT_SUCCESS) return 1;
+  stage = clutter_stage_new ();
+  clutter_stage_set_title (CLUTTER_STAGE (stage), "frame");
+  clutter_actor_set_background_color (stage, &bg);
+  clutter_actor_set_size (stage, 120, 200);
+  frame_view = clutter_actor_new ();
+  clutter_actor_set_content (frame_view, clutter_image_new ());
+  clutter_actor_set_size (frame_view, 120, 200);
+  clutter_actor_add_child (stage, frame_view);
+  clutter_actor_show (stage);
+  LOG ("[cluttertest-frame] up: waiting for windows in the registry");
+  g_thread_new ("frame-registry", frame_thread, NULL);
+  clutter_main ();
+  return 0;
+}
+
 int
 phe_clutter_main (void)
 {
   ClutterActor *stage; ClutterTimeline *tl; ClutterColor bg = { 20, 30, 50, 255 };
   GError *err = NULL; int width, height;
+  if (phe_is_frame ())
+    return frame_main ();
   LOG ("[cluttertest] clutter_init (Clutter %d.%d.%d)", CLUTTER_MAJOR_VERSION, CLUTTER_MINOR_VERSION, CLUTTER_MICRO_VERSION);
   if (clutter_init (NULL, NULL) != CLUTTER_INIT_SUCCESS) { LOG ("[cluttertest] clutter_init failed"); return 1; }
   if (g_getenv ("CLUTTER_UNCAPPED")) clutter_set_default_frame_rate (1000);
   proof_tess_and_png ();
   phe_clws_screen_size (&width, &height);
   stage = clutter_stage_new ();                            /* the backend makes its window: full screen, in the screen's current mode */
+  clutter_stage_set_title (CLUTTER_STAGE (stage), "cluttertest");
   clutter_stage_set_fullscreen (CLUTTER_STAGE (stage), TRUE);
   g_signal_connect (stage, "button-press-event", G_CALLBACK (on_press), NULL);
   g_signal_connect (stage, "motion-event", G_CALLBACK (on_motion), NULL);
@@ -271,6 +345,8 @@ phe_clutter_main (void)
     if (fd) pango_font_description_free (fd);
   }
   LOG ("[cluttertest] stage shown, running");
+  if (phe_cmd_has ("registry"))
+    LOG ("[cluttertest] registry test: frame process started (%d)", phe_frame_spawn ());
   clutter_main ();
   (void) err;
   return 0;

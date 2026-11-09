@@ -57,6 +57,11 @@ typedef struct {
   gboolean pointer_inside;
   gint width, height;            /* the window size when not full-screen */
   gchar *title;
+  gint reg_id;                   /* the window registry's id (C4: phewinreg), 0 = not registered, < 0 = no registry */
+  gint reg_watchers;             /* frame processes importing the content (the last answer), 0 = copy only now and then */
+  guint reg_frames;
+  guchar *reg_pixels;
+  gulong reg_paint_handler;
 } ClutterStageSymbian;
 typedef struct { ClutterStageCoglClass parent_class; } ClutterStageSymbianClass;
 
@@ -199,6 +204,86 @@ stage_target_size (ClutterStageSymbian *self, gint *w, gint *h)
     { *w = self->width; *h = self->height; }
 }
 
+/* ======================================================================== the window registry (plan C4, hildon-ui phewinreg)
+ * every shown stage is a registered window: its metadata (title, geometry, full-screen / hidden state) and, after each paint,
+ * its pixels (one copy into a shared FBSERV bitmap) for the frame process, which imports them as a texture. While nobody
+ * watches, the copy is made only every 60th frame (the registry's answer says when a frame process appears). */
+
+#define REG_FULLSCREEN 1   /* EPheWinFullscreen */
+#define REG_HIDDEN 8       /* EPheWinHidden */
+
+static void
+stage_reg_meta (ClutterStageSymbian *self)
+{
+  ClutterStageCogl *cogl = CLUTTER_STAGE_COGL (self);
+  gint w, h;
+  unsigned state;
+
+  if (self->reg_id <= 0 || cogl->onscreen == NULL)
+    return;
+  w = cogl_framebuffer_get_width (COGL_FRAMEBUFFER (cogl->onscreen));
+  h = cogl_framebuffer_get_height (COGL_FRAMEBUFFER (cogl->onscreen));
+  state = (self->fullscreen ? REG_FULLSCREEN : 0) | (self->shown ? 0 : REG_HIDDEN);
+  phe_clws_reg_update (self->reg_id, self->title, 0, 0, 0, w, h, state);
+}
+
+static void
+stage_reg_after_paint (ClutterStage *stage, gpointer data)
+{
+  ClutterStageSymbian *self = data;
+  ClutterStageCogl *cogl = CLUTTER_STAGE_COGL (self);
+  CoglFramebuffer *fb;
+  gint w, h, r;
+
+  if (self->reg_id <= 0 || cogl->onscreen == NULL)
+    return;
+  if (self->reg_watchers <= 0 && (self->reg_frames++ % 60) != 0)
+    return;
+  fb = COGL_FRAMEBUFFER (cogl->onscreen);
+  w = cogl_framebuffer_get_width (fb);
+  h = cogl_framebuffer_get_height (fb);
+  self->reg_pixels = g_realloc (self->reg_pixels, (gsize) w * h * 4);
+  /* (after the paint, before the swap: the back buffer holds the frame) */
+  if (!cogl_framebuffer_read_pixels (fb, 0, 0, w, h, COGL_PIXEL_FORMAT_BGRA_8888_PRE, self->reg_pixels))
+    return;
+  r = phe_clws_reg_content (self->reg_id, w, h, self->reg_pixels, w * 4, 0, 0, w, h);
+  if (r >= 0 && r != self->reg_watchers)
+    LOG ("[clutter-symbian] registry: window %d content %dx%d, %d watching", self->reg_id, w, h, r);
+  self->reg_watchers = r;
+}
+
+static void
+stage_reg_show (ClutterStageSymbian *self)
+{
+  ClutterStageCogl *cogl = CLUTTER_STAGE_COGL (self);
+
+  if (self->reg_id == 0 && cogl->onscreen)
+    {
+      self->reg_id = phe_clws_reg_window (self->title, 0, 0, 0, cogl_framebuffer_get_width (COGL_FRAMEBUFFER (cogl->onscreen)),
+                                          cogl_framebuffer_get_height (COGL_FRAMEBUFFER (cogl->onscreen)), self->fullscreen ? REG_FULLSCREEN : 0);
+      LOG ("[clutter-symbian] registry: stage '%s' is window %d", self->title ? self->title : "", self->reg_id);
+      if (self->reg_id > 0 && cogl->wrapper)
+        self->reg_paint_handler = g_signal_connect (cogl->wrapper, "after-paint", G_CALLBACK (stage_reg_after_paint), self);
+    }
+  else
+    stage_reg_meta (self);
+}
+
+static void
+stage_reg_remove (ClutterStageSymbian *self)
+{
+  ClutterStageCogl *cogl = CLUTTER_STAGE_COGL (self);
+
+  if (self->reg_paint_handler && cogl->wrapper)
+    g_signal_handler_disconnect (cogl->wrapper, self->reg_paint_handler);
+  self->reg_paint_handler = 0;
+  if (self->reg_id > 0)
+    phe_clws_reg_remove (self->reg_id);
+  self->reg_id = 0;
+  g_free (self->reg_pixels);
+  self->reg_pixels = NULL;
+}
+
 /* the window and the framebuffer to the size the stage should have now; the stage relays out at that size */
 static void
 stage_apply_size (ClutterStageSymbian *self)
@@ -216,6 +301,7 @@ stage_apply_size (ClutterStageSymbian *self)
   clutter_actor_set_size (CLUTTER_ACTOR (cogl->wrapper), w, h);
   _clutter_stage_dirty_viewport (cogl->wrapper);
   clutter_actor_queue_relayout (CLUTTER_ACTOR (cogl->wrapper));
+  stage_reg_meta (self);
 }
 
 static gboolean
@@ -243,6 +329,7 @@ static void
 clutter_stage_symbian_unrealize (ClutterStageWindow *stage_window)
 {
   all_stages = g_slist_remove (all_stages, stage_window);
+  stage_reg_remove (CLUTTER_STAGE_SYMBIAN (stage_window));
   clutter_stage_window_parent_iface->unrealize (stage_window);
 }
 
@@ -259,6 +346,7 @@ clutter_stage_symbian_show (ClutterStageWindow *stage_window, gboolean do_raise)
       phe_clws_window_raise (cogl_symbian_onscreen_get_window (cogl->onscreen), window_priority ());   /* the app's group in front: it gets the keyboard focus */
     }
   self->shown = TRUE;
+  stage_reg_show (self);
   clutter_stage_window_parent_iface->show (stage_window, do_raise);
 }
 
@@ -271,6 +359,7 @@ clutter_stage_symbian_hide (ClutterStageWindow *stage_window)
   if (cogl->onscreen)
     cogl_onscreen_hide (cogl->onscreen);
   self->shown = FALSE;
+  stage_reg_meta (self);
   clutter_stage_window_parent_iface->hide (stage_window);
 }
 
@@ -298,6 +387,7 @@ clutter_stage_symbian_set_fullscreen (ClutterStageWindow *stage_window, gboolean
   stage_apply_size (self);
   if (is_fullscreen && cogl->onscreen && self->shown)
     phe_clws_window_raise (cogl_symbian_onscreen_get_window (cogl->onscreen), window_priority ());
+  stage_reg_meta (self);
   if (cogl->wrapper)
     _clutter_stage_update_state (cogl->wrapper, is_fullscreen ? 0 : CLUTTER_STAGE_STATE_FULLSCREEN, is_fullscreen ? CLUTTER_STAGE_STATE_FULLSCREEN : 0);
 }
@@ -308,7 +398,8 @@ clutter_stage_symbian_set_title (ClutterStageWindow *stage_window, const gchar *
   ClutterStageSymbian *self = CLUTTER_STAGE_SYMBIAN (stage_window);
 
   g_free (self->title);
-  self->title = g_strdup (title);   /* WSERV windows have no title bar: kept for the window registry (plan C4) */
+  self->title = g_strdup (title);   /* WSERV windows have no title bar: the frame process shows it (the window registry) */
+  stage_reg_meta (self);
 }
 
 static void
