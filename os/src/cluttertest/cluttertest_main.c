@@ -355,12 +355,20 @@ frame_show (gpointer data)
 /* the registry's events, on the main loop (no helper thread, hildon-port.md 7.49): a change = list again; a content tick = one
    redraw request (Clutter coalesces them into the next master-clock frame) */
 static int frame_relists, frame_ticks;
+/* per-phase timers of a compositor frame (hildon-port.md 7.52): first content tick -> the master clock's pre-paint (clock latency),
+   pre-paint -> stage paint (the stage update: events, relayout), paint -> after-paint (painting), after-paint -> post-paint (the swap
+   and the rest of the update), post-paint -> next pre-paint (idle) */
+static gint64 frame_tick_first, frame_pre, frame_post, frame_after;
+static gint64 frame_sum_lat, frame_sum_upd, frame_sum_swap, frame_sum_idle;
+static int frame_lat_n;
 static void
 frame_registry (int content)
 {
   if (content)
     {
       frame_ticks++;
+      if (!frame_tick_first)
+        frame_tick_first = g_get_monotonic_time ();
       clutter_actor_queue_redraw (frame_stage);
       return;
     }
@@ -384,6 +392,31 @@ frame_paint (ClutterActor *stage, gpointer data)
   frame_paint_start = g_get_monotonic_time ();
 }
 
+static gboolean
+frame_pre_paint (gpointer data)
+{
+  gint64 now = g_get_monotonic_time ();
+  (void) data;
+  if (frame_post && frame_post <= now)
+    frame_sum_idle += now - frame_post;
+  if (frame_tick_first && frame_tick_first <= now)
+    frame_sum_lat += now - frame_tick_first, frame_lat_n++;
+  frame_tick_first = 0;
+  frame_pre = now;
+  return TRUE;
+}
+
+static gboolean
+frame_post_paint (gpointer data)
+{
+  gint64 now = g_get_monotonic_time ();
+  (void) data;
+  if (frame_after && frame_after <= now && frame_after >= frame_pre)
+    frame_sum_swap += now - frame_after;
+  frame_post = now;
+  return TRUE;
+}
+
 static void
 frame_after_paint (ClutterActor *stage, gpointer data)
 {
@@ -396,14 +429,21 @@ frame_after_paint (ClutterActor *stage, gpointer data)
       frame_wait0 = (gint64) phe_clws_wait_us;
     }
   frame_frames++;
+  frame_after = now;
   if (frame_paint_start && frame_paint_start <= now)
     frame_paint_sum += now - frame_paint_start;
+  if (frame_pre && frame_paint_start >= frame_pre)
+    frame_sum_upd += frame_paint_start - frame_pre;
   if (now - frame_t0 >= 2000000)
     {
       const gint64 wait = (gint64) phe_clws_wait_us - frame_wait0;
       LOG ("[cluttertest-frame] %d composited frames in %d ms = %.1f fps (%d content ticks, %d lists; per frame: paint %d us, waiting %d us)",
            frame_frames, (int) ((now - frame_t0) / 1000), frame_frames * 1000000.0 / (now - frame_t0), frame_ticks, frame_relists,
            (int) (frame_paint_sum / frame_frames), (int) (wait / frame_frames));
+      LOG ("[cluttertest-frame] phases us/frame: tick->clock %d, update (pre-paint..paint) %d, swap+post %d, idle %d",
+           frame_lat_n ? (int) (frame_sum_lat / frame_lat_n) : 0, (int) (frame_sum_upd / frame_frames),
+           (int) (frame_sum_swap / frame_frames), (int) (frame_sum_idle / frame_frames));
+      frame_sum_lat = frame_sum_upd = frame_sum_swap = frame_sum_idle = 0; frame_lat_n = 0;
       frame_frames = frame_ticks = frame_relists = 0;
       frame_paint_sum = 0;
       frame_wait0 = (gint64) phe_clws_wait_us;
@@ -430,6 +470,8 @@ frame_main (void)
   clutter_stage_set_fullscreen (CLUTTER_STAGE (frame_stage), TRUE);
   g_signal_connect (frame_stage, "after-paint", G_CALLBACK (frame_after_paint), NULL);
   g_signal_connect (frame_stage, "paint", G_CALLBACK (frame_paint), NULL);
+  clutter_threads_add_repaint_func_full (CLUTTER_REPAINT_FLAGS_PRE_PAINT, frame_pre_paint, NULL, NULL);
+  clutter_threads_add_repaint_func_full (CLUTTER_REPAINT_FLAGS_POST_PAINT, frame_post_paint, NULL, NULL);
   clutter_actor_show (frame_stage);
   clutter_symbian_registry_hook = frame_registry;
   LOG ("[cluttertest-frame] up: compositing the registry's windows full screen (registry events: %d)", phe_clws_frame_watch ());
