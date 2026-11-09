@@ -89,6 +89,10 @@ extern "C" int phe_frame_list(PheFrameWin* aOut, int aMax)
 				const TSize s = b->SizeInPixels();
 				const TInt stride = CFbsBitmap::ScanLineLength(s.iWidth, b->DisplayMode());
 				f.iPx = (unsigned char*)User::Alloc(s.iWidth * s.iHeight * 4);
+				static TInt listLogged;
+				if (listLogged++ < 3)
+					RDebug::Printf("[cluttertest-frame] window %d: bitmap %d %dx%d mode %d -> pixels %s", w.iId, w.iBitmap, s.iWidth,
+						s.iHeight, b->DisplayMode(), f.iPx ? "copied" : "NOT allocated");
 				if (f.iPx)
 					{
 					b->BeginDataAccess();
