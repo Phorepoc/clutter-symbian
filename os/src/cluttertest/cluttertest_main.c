@@ -226,7 +226,7 @@ extern int phe_is_frame (void);
 extern int phe_cmd_has (const char *word);
 
 typedef struct { int n; PheFrameWin w[FRAME_MAX]; } FrameList;
-typedef struct { int id, token; ClutterActor *gpu, *bmp; EGLImageKHR image; gboolean seen; } FrameWin;
+typedef struct { int id, token; ClutterActor *gpu, *bmp; EGLImageKHR image; gboolean seen, down; } FrameWin;
 static ClutterActor *frame_stage;
 static GList *frame_wins;          /* FrameWin, registration order */
 static int frame_checks, frame_lists, frame_frames;
@@ -246,6 +246,18 @@ frame_button (ClutterActor *actor, ClutterEvent *event, gpointer data)
   type = t == CLUTTER_BUTTON_PRESS ? 10 : t == CLUTTER_BUTTON_RELEASE ? 11 : 1;
   clutter_event_get_coords (event, &x, &y);
   clutter_actor_transform_stage_point (actor, x, y, &lx, &ly);
+  if (type == 1 && !f->down)
+    return CLUTTER_EVENT_PROPAGATE;          /* (a move without the button: nothing for the owner) */
+  if (type == 10)
+    {
+      f->down = TRUE;
+      clutter_grab_pointer (actor);          /* the gesture stays this window's until the release, wherever the pointer goes */
+    }
+  else if (type == 11)
+    {
+      f->down = FALSE;
+      clutter_ungrab_pointer ();
+    }
   r = phe_clws_reg_pointer (f->id, type, (int) lx, (int) ly);
   if (type != 1)
     LOG ("[cluttertest-frame] window %d: pointer %d at %d,%d -> %d", f->id, type, (int) lx, (int) ly, r);
@@ -268,6 +280,7 @@ frame_win (int id)
   clutter_actor_set_reactive (f->bmp, TRUE);
   g_signal_connect (f->bmp, "button-press-event", G_CALLBACK (frame_button), f);
   g_signal_connect (f->bmp, "button-release-event", G_CALLBACK (frame_button), f);
+  g_signal_connect (f->bmp, "motion-event", G_CALLBACK (frame_button), f);
   clutter_actor_hide (f->gpu);
   clutter_actor_hide (f->bmp);
   clutter_actor_add_child (frame_stage, f->gpu);
