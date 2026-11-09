@@ -148,6 +148,9 @@ on_press2 (ClutterActor *stage, ClutterEvent *ev, gpointer data)
   gfloat x, y; (void) data;
   clutter_event_get_coords (ev, &x, &y);
   LOG ("[cluttertest] SECOND stage: button %u press at %.0f,%.0f", clutter_event_get_button (ev), x, y);
+  /* the second press on it closes it (the single full-screen stage of the scan-out measurement); the first only checks the routing */
+  static int presses;
+  if (++presses == 2 && stage2) { clutter_actor_destroy (stage2); stage2 = NULL; LOG ("[cluttertest] second stage destroyed (2nd click): one full-screen stage"); }
   return CLUTTER_EVENT_STOP;
 }
 
@@ -246,6 +249,7 @@ phe_clutter_main (void)
     clutter_actor_set_size (r, 60, 40); clutter_actor_set_position (r, 50, 40); clutter_actor_set_background_color (r, &cr);
     clutter_actor_add_child (s2, r);
     g_signal_connect (s2, "button-press-event", G_CALLBACK (on_press2), NULL);
+    g_signal_connect (s2, "key-press-event", G_CALLBACK (on_key), NULL);   /* (the newest stage has the keyboard focus: its window group is in front) */
     g_signal_connect (s2, "after-paint", G_CALLBACK (after_paint2), NULL);
     clutter_actor_show (s2);
     LOG ("[cluttertest] second stage shown (160x120)");
