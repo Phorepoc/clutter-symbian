@@ -422,6 +422,7 @@ frame_registry (int content)
 /* after each paint of the compositor's stage: its frame rate, and the pixel check (its (10,10) and (1010,10), three times once a GPU
    window is composited) */
 static gint64 frame_paint_start, frame_paint_sum, frame_wait0;
+static int frame_painted;
 extern unsigned long long phe_clws_wait_us;   /* the backend's time blocked in its wait set (7.50) */
 static void
 frame_paint (ClutterActor *stage, gpointer data)
@@ -479,9 +480,10 @@ frame_after_paint (ClutterActor *stage, gpointer data)
   frame_after = now;
   frame_cpu_after = phe_clws_thread_cpu_us ();
   if (frame_paint_start && frame_paint_start <= now)
-    frame_paint_sum += now - frame_paint_start;
+    frame_paint_sum += now - frame_paint_start, frame_painted++;
   if (frame_pre && frame_paint_start >= frame_pre)
     frame_sum_upd += frame_paint_start - frame_pre;
+  frame_paint_start = 0;     /* (one paint signal pairs with one after-paint: a stale start counted whole idle gaps as paint) */
   if (now - frame_t0 >= 2000000)
     {
       const gint64 wait = (gint64) phe_clws_wait_us - frame_wait0;
@@ -496,7 +498,7 @@ frame_after_paint (ClutterActor *stage, gpointer data)
       }
       LOG ("[cluttertest-frame] %d composited frames in %d ms = %.1f fps (%d content ticks, %d lists; per frame: paint %d us, waiting %d us)",
            frame_frames, (int) ((now - frame_t0) / 1000), frame_frames * 1000000.0 / (now - frame_t0), frame_ticks, frame_relists,
-           (int) (frame_paint_sum / frame_frames), (int) (wait / frame_frames));
+           frame_painted ? (int) (frame_paint_sum / frame_painted) : 0, (int) (wait / frame_frames));
       LOG ("[cluttertest-frame] phases us/frame: tick->clock %d, update (pre-paint..paint) %d, swap+post %d, idle %d",
            frame_lat_n ? (int) (frame_sum_lat / frame_lat_n) : 0, (int) (frame_sum_upd / frame_frames),
            (int) (frame_sum_swap / frame_frames), (int) (frame_sum_idle / frame_frames));
@@ -507,7 +509,7 @@ frame_after_paint (ClutterActor *stage, gpointer data)
       frame_sum_flush = frame_sum_eglswap = frame_sum_cpu = 0;
       frame_sum_lat = frame_sum_upd = frame_sum_swap = frame_sum_idle = 0; frame_lat_n = 0;
       frame_frames = frame_ticks = frame_relists = 0;
-      frame_paint_sum = 0;
+      frame_paint_sum = 0; frame_painted = 0;
       frame_wait0 = (gint64) phe_clws_wait_us;
       frame_t0 = now;
     }
