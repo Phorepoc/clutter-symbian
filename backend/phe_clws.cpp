@@ -42,6 +42,8 @@ namespace
 	TReq gEv, gRd, gSel, gWt, gTm;	// gTm: the poll timeout (RTimer::HighRes)
 	RTimer gTimer;		// gWt: the window registry's watcher count (C4)
 	TInt gWtSeen = -1;
+	TReq gRn, gRc;		// a compositor's registry waits in this wait set (hildon-port.md 7.49): changes (Notify), content ticks (ContentNotify)
+	TUint gRnSeen = 1, gRcSeen;
 	TThreadId gMainId;
 
 	// the poll helper
@@ -209,7 +211,7 @@ extern "C" void phe_clws_window_destroy(void* aW)
 
 extern "C" int phe_clws_pending(void)
 	{
-	return gUp && (gEv.Done() || gRd.Done() || gWt.Done());
+	return gUp && (gEv.Done() || gRd.Done() || gWt.Done() || gRn.Done() || gRc.Done());
 	}
 
 static int Translate(const TWsEvent& aWs, PheClwsEvent* aEv)
@@ -276,6 +278,31 @@ extern "C" int phe_clws_next_event(PheClwsEvent* aEv)
 		aEv->type = PHE_CLWS_WATCHERS; aEv->x = n;
 		return 1;
 		}
+	if (gRn.Done() || gRc.Done())
+		{
+		extern RPheWinReg gReg;
+		TReq& q = gRn.Done() ? gRn : gRc;
+		Settle(q);
+		const TInt v = q.iSt.Int();
+		q.iActive = EFalse;
+		if (v < 0)
+			return 0;						// (the registry went away)
+		memset(aEv, 0, sizeof *aEv);
+		if (&q == &gRn)
+			{
+			gRnSeen = (TUint)v;
+			gRn.Issue(); gReg.Notify(gRnSeen, gRn.iSt);
+			aEv->type = PHE_CLWS_REG_CHANGED;
+			}
+		else
+			{
+			gRcSeen = (TUint)v;
+			gRc.Issue(); gReg.ContentNotify(gRcSeen, gRc.iSt);
+			aEv->type = PHE_CLWS_REG_CONTENT;
+			}
+		aEv->x = v;
+		return 1;
+		}
 	if (gRd.Done())
 		{
 		Settle(gRd);
@@ -335,8 +362,8 @@ extern "C" int phe_clws_poll(PheClwsPollFD* aFds, unsigned aN, int aTimeout)
 		gJobFds = fds; gJobN = n + 1; gJobTimeout = timed ? -1 : aTimeout; gJobSt = &gSel.iSt; gJobPosted = ETrue;
 		pthread_cond_signal(&gCv);
 		pthread_mutex_unlock(&gMx);
-		TReq* all[5] = { &gSel, &gEv, &gRd, &gWt, &gTm };
-		WaitAny(all, 5);
+		TReq* all[7] = { &gSel, &gEv, &gRd, &gWt, &gTm, &gRn, &gRc };
+		WaitAny(all, 7);
 		if (timed)
 			{
 			if (!gTm.Done())
@@ -463,6 +490,31 @@ extern "C" int phe_clws_reg_content_gpu(int aId, int aToken, int aW, int aH, int
 	if (!gRegUp)
 		return KErrNotReady;
 	return gReg.Content(aId, 0, TRect(TPoint(aDx, aDy), TSize(aDw, aDh)), aToken);
+	}
+
+// a compositor (hildon-port.md 7.49): registry changes and content ticks arrive as events of this wait set (PHE_CLWS_REG_CHANGED /
+// PHE_CLWS_REG_CONTENT), on the main loop, with no helper thread. The first change event comes at once (the serial starts at 1)
+extern "C" int phe_clws_frame_watch(void)
+	{
+	const TInt r = RegConnect();
+	if (r != KErrNone || gRn.iActive)
+		return r;
+	gRn.Issue(); gReg.Notify(gRnSeen, gRn.iSt);
+	gRc.Issue(); gReg.ContentNotify(gRcSeen, gRc.iSt);
+	return KErrNone;
+	}
+
+extern "C" int phe_clws_reg_list(void* aBuf, int aBytes)
+	{
+	if (!gRegUp)
+		return KErrNotReady;
+	TPtr8 p((TUint8*)aBuf, 0, aBytes);
+	return gReg.List(p);
+	}
+
+extern "C" int phe_clws_reg_subscribe(int aId, int aMode)
+	{
+	return gRegUp ? gReg.Subscribe(aId, aMode) : KErrNotReady;
 	}
 
 extern "C" int phe_clws_reg_subs(int aId, int* aSubscribers, int* aComposited)

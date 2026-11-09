@@ -45,6 +45,10 @@ void cogl_symbian_onscreen_set_composited (CoglOnscreen *onscreen, CoglBool comp
 
 ClutterBackend *clutter_backend_symbian_new (void);
 
+/* a compositor process (OURS, hildon-port.md 7.49): set this, then phe_clws_frame_watch (); the hook runs on the main loop with
+   content = FALSE for a registry change (list again) and TRUE for a content-only update (redraw) */
+void (*clutter_symbian_registry_hook) (int content);
+
 /* the GPU path of the registry content (hildon-port.md 7.47): EGL_SYMBIAN_SVGA_SHARE_PH images (mesa-symbian egl_symbian.c) */
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -80,7 +84,8 @@ typedef struct {
   void *share_image;             /* EGLImageKHR */
   CoglTexture *share_tex;
   gint share_token, share_w, share_h;
-  gboolean share_failed;         /* no SVGA share images here (softpipe, the Mali): the bitmap path only */
+  gboolean share_failed;
+  gint64 prof_paint_start;       /* the bounded client-frame profile (7.49) */         /* no SVGA share images here (softpipe, the Mali): the bitmap path only */
 } ClutterStageSymbian;
 typedef struct { ClutterStageCoglClass parent_class; } ClutterStageSymbianClass;
 
@@ -272,6 +277,14 @@ stage_reg_meta (ClutterStageSymbian *self)
   phe_clws_reg_update (self->reg_id, self->title, 0, 0, 0, w, h, state);
 }
 
+/* the stage's "paint" signal (RUN_LAST: this handler runs before the stage paints) */
+static void
+stage_prof_paint (ClutterActor *stage, gpointer data)
+{
+  (void) stage;
+  ((ClutterStageSymbian *) data)->prof_paint_start = g_get_monotonic_time ();
+}
+
 static void
 stage_share_drop (ClutterStageSymbian *self)
 {
@@ -339,8 +352,10 @@ stage_share_copy (ClutterStageSymbian *self, CoglFramebuffer *fb, gint w, gint h
   if (!cogl_texture_get_gl_texture (self->share_tex, &handle, &target))
     return FALSE;
   /* the frame's rendering is in Cogl's journal until flushed; the copy reads the onscreen (GL framebuffer 0) */
+  gint64 p0 = g_get_monotonic_time (), p1, p2;
   (void) fb;
   cogl_flush ();                                            /* every journal (Cogl 1.x) */
+  p1 = g_get_monotonic_time ();
   glGetIntegerv (GL_TEXTURE_BINDING_2D, &prev_tex);
   glGetIntegerv (GL_FRAMEBUFFER_BINDING, &prev_fbo);
   if (prev_fbo != 0)
@@ -351,6 +366,30 @@ stage_share_copy (ClutterStageSymbian *self, CoglFramebuffer *fb, gint w, gint h
   if (prev_fbo != 0)
     glBindFramebuffer (GL_FRAMEBUFFER, prev_fbo);
   glFlush ();                                               /* to the device before the frame process samples it */
+  p2 = g_get_monotonic_time ();
+  {
+    /* bounded profile (7.49): per frame, the journal flush (the paint's GL calls + command buffer), the copy + flush, and the
+       interval between frames; three summaries of 120 frames, then silent */
+    static gint64 last, sum_flush, sum_copy, sum_iv, sum_paint;
+    static int n, batches;
+    if (batches < 3 && self->fullscreen)   /* (the full-screen stage only: the counters are this one's) */
+      {
+        if (last)
+          {
+            sum_flush += p1 - p0; sum_copy += p2 - p1; sum_iv += p0 - last; n++;
+            if (self->prof_paint_start && self->prof_paint_start <= p0)
+              sum_paint += p0 - self->prof_paint_start;
+          }
+        last = p0;
+        if (n == 120)
+          {
+            LOG ("[clutter-symbian] prof (120 frames, us/frame): interval %d = paint (stage paint signal .. after-paint) %d + journal flush %d"
+                 " + copy %d + the rest (layout, clock wait, other stages) %d", (int) (sum_iv / n), (int) (sum_paint / n), (int) (sum_flush / n),
+                 (int) (sum_copy / n), (int) ((sum_iv - sum_paint - sum_flush - sum_copy) / n));
+            sum_flush = sum_copy = sum_iv = sum_paint = 0; n = 0; batches++;
+          }
+      }
+  }
   return TRUE;
 }
 
@@ -397,7 +436,10 @@ stage_reg_show (ClutterStageSymbian *self)
       stage_reg_subs (self);
       LOG ("[clutter-symbian] registry: stage '%s' is window %d", self->title ? self->title : "", self->reg_id);
       if (self->reg_id > 0 && cogl->wrapper)
-        self->reg_paint_handler = g_signal_connect (cogl->wrapper, "after-paint", G_CALLBACK (stage_reg_after_paint), self);
+        {
+          self->reg_paint_handler = g_signal_connect (cogl->wrapper, "after-paint", G_CALLBACK (stage_reg_after_paint), self);
+          g_signal_connect (cogl->wrapper, "paint", G_CALLBACK (stage_prof_paint), self);
+        }
     }
   else
     stage_reg_meta (self);
@@ -828,6 +870,11 @@ translate (ClutterBackend *backend, const PheClwsEvent *e)
             stage_apply_size (self);
           clutter_actor_queue_redraw (CLUTTER_ACTOR (CLUTTER_STAGE_COGL (self)->wrapper));
         }
+      break;
+    case PHE_CLWS_REG_CHANGED: case PHE_CLWS_REG_CONTENT:
+      /* a compositor's registry events (hildon-port.md 7.49), on the main loop: to the application's hook */
+      if (clutter_symbian_registry_hook)
+        clutter_symbian_registry_hook (e->type == PHE_CLWS_REG_CONTENT);
       break;
     case PHE_CLWS_WATCHERS:
       {

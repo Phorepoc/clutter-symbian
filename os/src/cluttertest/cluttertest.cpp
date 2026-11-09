@@ -34,39 +34,22 @@ GLDEF_C TInt E32Main()
 // one window as the compositor sees it (cluttertest_main.c PheFrameWin): geometry, GPU share token, or else a copy of the bitmap
 struct PheFrameWin { int iId, iX, iY, iW, iH, iToken; unsigned char* iPx; int iPw, iPh; char iTitle[64]; };
 
-// waits for the next registry change after *aSeen, then: every other process's visible window, in registration order (at most
-// aMax), each subscribed as composited by this process (EPheWinComposite: its owner keeps it off the window server's screen).
-// Returns the count, or an error
-extern "C" int phe_frame_list(unsigned* aSeen, PheFrameWin* aOut, int aMax)
+// every other process's visible window now, in registration order (at most aMax), each subscribed as composited by this process
+// (EPheWinComposite: its owner keeps it off the window server's screen). Runs on the main loop, over the backend's registry session
+// (its events say when to call it again: hildon-port.md 7.49). Returns the count, or an error
+extern "C" int phe_clws_reg_list(void* aBuf, int aBytes);
+extern "C" int phe_clws_reg_subscribe(int aId, int aMode);
+extern "C" int phe_frame_list(PheFrameWin* aOut, int aMax)
 	{
-	static RPheWinReg reg;
-	static TBool up;
 	static RArray<TInt> subscribed;
-	if (!up)
+	if (!RFbsSession::GetSession())
 		{
-		TInt r = RFbsSession::GetSession() ? KErrNone : RFbsSession::Connect();
-		if (r == KErrNone)
-			r = reg.Connect();
+		const TInt r = RFbsSession::Connect();
 		if (r != KErrNone)
 			return r;
-		up = ETrue;
-		}
-	// the first call lists at once: the windows that registered before this process came (nothing else would change: their content
-	// waits for a subscriber). The registry's serial starts at 1, so from 1 on the wait ends at the next change
-	if (*aSeen == 0)
-		*aSeen = 1;
-	else
-		{
-		TRequestStatus st;
-		reg.Notify(*aSeen, st);
-		User::WaitForRequest(st);
-		if (st.Int() < 0)
-			return st.Int();
-		*aSeen = (TUint)st.Int();
 		}
 	TPheWinInfo list[16];
-	TPtr8 p((TUint8*)list, 0, sizeof(list));
-	const TInt n = reg.List(p);
+	const TInt n = phe_clws_reg_list(list, sizeof(list));
 	if (n < 0)
 		return n;
 	const TUint me = (TUint)RProcess().Id().Id();
@@ -76,7 +59,7 @@ extern "C" int phe_frame_list(unsigned* aSeen, PheFrameWin* aOut, int aMax)
 		const TPheWinInfo& w = list[i];
 		if (w.iOwner == me || (w.iState & EPheWinHidden))
 			continue;
-		if (subscribed.Find(w.iId) < 0 && reg.Subscribe(w.iId, EPheWinComposite) == KErrNone)
+		if (subscribed.Find(w.iId) < 0 && phe_clws_reg_subscribe(w.iId, EPheWinComposite) == KErrNone)
 			subscribed.Append(w.iId);		// (a window that goes leaves a stale id: ids are not reused)
 		PheFrameWin& f = aOut[out];
 		Mem::FillZ(&f, sizeof(f));

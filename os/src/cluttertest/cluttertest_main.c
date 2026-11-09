@@ -202,8 +202,9 @@ on_activate (ClutterActor *stage, gpointer data)
 extern void phe_clws_screen_size (int *w, int *h);
 
 /* ======================================================================== the frame side of the registry test (C4, "cluttertest frame")
- * a small compositor (hildon-port.md 7.48): a helper thread blocks on the registry (phe_frame_list, cluttertest.cpp), subscribes to
- * every other process's window as its compositor, and hands each window list to the main loop. The main loop draws the windows on
+ * a small compositor (hildon-port.md 7.48/7.49): the registry's events reach the main loop (the backend's wait set); a change lists
+ * the windows again (phe_frame_list, cluttertest.cpp: it subscribes to every other process's window as its compositor), a content tick
+ * is a redraw. The main loop draws the windows on
  * this process's own FULL-SCREEN stage, at their geometry, in registration order: a window with a GPU share token is its exported
  * texture (imported once per token, flipped: the exporter copies GL rows), else its published bitmap. The composited windows are off
  * the window server's screen (their owners hide them and skip the present), so this stage alone is on the screen and keeps scan-out. */
@@ -216,7 +217,9 @@ CoglTexture2D *_cogl_egl_texture_2d_new_from_image (CoglContext *ctx, int width,
 
 typedef struct { int id, x, y, w, h, token; unsigned char *px; int pw, ph; char title[64]; } PheFrameWin;
 #define FRAME_MAX 8
-extern int phe_frame_list (unsigned *seen, PheFrameWin *out, int max);
+extern int phe_frame_list (PheFrameWin *out, int max);
+extern int phe_clws_frame_watch (void);
+extern void (*clutter_symbian_registry_hook) (int content);
 extern void phe_frame_free (unsigned char *pixels);
 extern int phe_frame_spawn (void);
 extern int phe_is_frame (void);
@@ -349,6 +352,27 @@ frame_show (gpointer data)
   return G_SOURCE_REMOVE;
 }
 
+/* the registry's events, on the main loop (no helper thread, hildon-port.md 7.49): a change = list again; a content tick = one
+   redraw request (Clutter coalesces them into the next master-clock frame) */
+static int frame_relists, frame_ticks;
+static void
+frame_registry (int content)
+{
+  if (content)
+    {
+      frame_ticks++;
+      clutter_actor_queue_redraw (frame_stage);
+      return;
+    }
+  {
+    FrameList *list = g_new0 (FrameList, 1);
+    list->n = phe_frame_list (list->w, FRAME_MAX);
+    frame_relists++;
+    if (list->n < 0) { LOG ("[cluttertest-frame] registry: %d", list->n); g_free (list); return; }
+    frame_show (list);
+  }
+}
+
 /* after each paint of the compositor's stage: its frame rate, and the pixel check (its (10,10) and (1010,10), three times once a GPU
    window is composited) */
 static void
@@ -362,9 +386,9 @@ frame_after_paint (ClutterActor *stage, gpointer data)
   frame_frames++;
   if (now - frame_t0 >= 2000000)
     {
-      LOG ("[cluttertest-frame] %d composited frames in %d ms = %.1f fps", frame_frames, (int) ((now - frame_t0) / 1000),
-           frame_frames * 1000000.0 / (now - frame_t0));
-      frame_frames = 0;
+      LOG ("[cluttertest-frame] %d composited frames in %d ms = %.1f fps (%d content ticks, %d lists)", frame_frames,
+           (int) ((now - frame_t0) / 1000), frame_frames * 1000000.0 / (now - frame_t0), frame_ticks, frame_relists);
+      frame_frames = frame_ticks = frame_relists = 0;
       frame_t0 = now;
     }
   if (frame_checks >= 3 || !frame_wins || !((FrameWin *) frame_wins->data)->token)
@@ -374,20 +398,6 @@ frame_after_paint (ClutterActor *stage, gpointer data)
   cogl_framebuffer_read_pixels (cogl_get_draw_framebuffer (), 1010, 10, 1, 1, COGL_PIXEL_FORMAT_BGRA_8888_PRE, b);
   LOG ("[cluttertest-frame] composite check #%d: pixel(10,10) = %02x%02x%02x%02x, pixel(1010,10) = %02x%02x%02x%02x", frame_checks,
        a[3], a[2], a[1], a[0], b[3], b[2], b[1], b[0]);
-}
-
-static gpointer
-frame_thread (gpointer data)
-{
-  unsigned seen = 0;
-  (void) data;
-  for (;;)
-    {
-      FrameList *list = g_new0 (FrameList, 1);
-      list->n = phe_frame_list (&seen, list->w, FRAME_MAX);
-      if (list->n < 0) { LOG ("[cluttertest-frame] registry: %d", list->n); g_free (list); return NULL; }
-      g_idle_add (frame_show, list);
-    }
 }
 
 static int
@@ -402,8 +412,8 @@ frame_main (void)
   clutter_stage_set_fullscreen (CLUTTER_STAGE (frame_stage), TRUE);
   g_signal_connect (frame_stage, "after-paint", G_CALLBACK (frame_after_paint), NULL);
   clutter_actor_show (frame_stage);
-  LOG ("[cluttertest-frame] up: compositing the registry's windows full screen");
-  g_thread_new ("frame-registry", frame_thread, NULL);
+  clutter_symbian_registry_hook = frame_registry;
+  LOG ("[cluttertest-frame] up: compositing the registry's windows full screen (registry events: %d)", phe_clws_frame_watch ());
   clutter_main ();
   return 0;
 }

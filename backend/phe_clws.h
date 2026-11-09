@@ -11,7 +11,9 @@ extern "C" {
 /* event types */
 enum { PHE_CLWS_NONE = 0, PHE_CLWS_KEY_DOWN = 1, PHE_CLWS_KEY = 2, PHE_CLWS_KEY_UP = 3, PHE_CLWS_POINTER = 4, PHE_CLWS_REDRAW = 5, PHE_CLWS_SCREEN_CHANGED = 6,
        PHE_CLWS_FOCUS_IN = 7, PHE_CLWS_FOCUS_OUT = 8,
-       PHE_CLWS_WATCHERS = 9 /* a subscription to one of our registry windows changed: x = the owner's subscription serial (C4, 7.48) */ };
+       PHE_CLWS_WATCHERS = 9 /* a subscription to one of our registry windows changed: x = the owner's subscription serial (C4, 7.48) */,
+       PHE_CLWS_REG_CHANGED = 10 /* a compositor: the registry changed (list it again); x = the serial (7.49) */,
+       PHE_CLWS_REG_CONTENT = 11 /* a compositor: a GPU window published its next frame (redraw); x = the content tick (7.49) */ };
 /* pointer types = TPointerEvent::TType: 0 button1 down, 1 button1 up, 2 button2 down, 3 up, 4 button3 down, 5 up, 6 drag, 7 move */
 typedef struct {
   int type;
@@ -54,6 +56,10 @@ int phe_clws_reg_content_gpu (int id, int token, int w, int h, int dx, int dy, i
 void phe_clws_reg_remove (int id);
 /* window id's subscriptions now (hildon-port.md 7.48): frame processes subscribed, and how many of them composite it; KErrNotFound or another error */
 int phe_clws_reg_subs (int id, int *subscribers, int *composited);
+/* a compositor (7.49): start the registry events (PHE_CLWS_REG_CHANGED / _CONTENT); the list; a subscription (TPheWinSubscription) */
+int phe_clws_frame_watch (void);
+int phe_clws_reg_list (void *buf, int bytes);
+int phe_clws_reg_subscribe (int id, int mode);
 
 #ifdef __cplusplus
 }
