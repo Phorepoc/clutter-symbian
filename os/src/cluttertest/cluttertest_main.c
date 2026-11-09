@@ -226,7 +226,10 @@ extern int phe_is_frame (void);
 extern int phe_cmd_has (const char *word);
 
 typedef struct { int n; PheFrameWin w[FRAME_MAX]; } FrameList;
-typedef struct { int id, token; ClutterActor *gpu, *bmp; EGLImageKHR image; gboolean seen, down; } FrameWin;
+typedef struct { int id, token; ClutterActor *gpu, *bmp; EGLImageKHR image; gboolean seen, down; int iw, ih; } FrameWin;
+extern int phe_decor_content_y (int id, int y);   /* phedecor.c: a decorated window sits below its title bar */
+extern int phe_decor_shown (int id);               /* phedecor.c: FALSE = minimised by its bar */
+extern float phe_decor_scale (int id, int w, int h);   /* phedecor.c: scale-to-fit under the bar */
 static ClutterActor *frame_stage;
 static GList *frame_wins;          /* FrameWin, registration order */
 static int frame_checks, frame_lists, frame_frames;
@@ -326,6 +329,8 @@ frame_import_gpu (FrameWin *f, const PheFrameWin *w)
     destroy (dpy, f->image);
   f->image = img;
   f->token = w->token;
+  f->iw = w->w;
+  f->ih = w->h;
   LOG ("[cluttertest-frame] composite: window %d '%s' %dx%d at %d,%d, token %d (GPU texture, no copy)", w->id, w->title, w->w, w->h,
        w->x, w->y, w->token);
   return TRUE;
@@ -345,12 +350,24 @@ frame_show (gpointer data)
       PheFrameWin *w = &list->w[i];
       FrameWin *f = frame_win (w->id);
       f->seen = TRUE;
-      if (w->token && (w->token == f->token || frame_import_gpu (f, w)))
+      const int cy = phe_decor_content_y (w->id, w->y);
+      if (!phe_decor_shown (w->id))
         {
-          clutter_actor_set_position (f->gpu, w->x, w->y);
+          clutter_actor_hide (f->gpu);
+          clutter_actor_hide (f->bmp);
+          if (w->px)
+            phe_frame_free (w->px);
+          continue;
+        }
+      /* a new size is a new import: the EGLImage is made at the window's size, so a resized surface (maximise) re-imports */
+      if (w->token && ((w->token == f->token && w->w == f->iw && w->h == f->ih) || frame_import_gpu (f, w)))
+        {
+          /* flipped about its centre and scaled to fit: the top-left stays at (x, cy) (input maps back through the transform) */
+          const float k = phe_decor_scale (w->id, w->w, w->h);
+          clutter_actor_set_position (f->gpu, w->x - w->w * (1 - k) / 2, cy - w->h * (1 - k) / 2);
           clutter_actor_set_size (f->gpu, w->w, w->h);
           clutter_actor_set_pivot_point (f->gpu, 0.5, 0.5);
-          clutter_actor_set_scale (f->gpu, 1.0, -1.0);
+          clutter_actor_set_scale (f->gpu, k, -k);
           clutter_actor_hide (f->bmp);
           clutter_actor_show (f->gpu);
           clutter_actor_queue_redraw (f->gpu);       /* the texture is the window's: new content is a redraw */
@@ -361,8 +378,13 @@ frame_show (gpointer data)
           if (clutter_image_set_data (CLUTTER_IMAGE (clutter_actor_get_content (f->bmp)), w->px, COGL_PIXEL_FORMAT_BGRA_8888_PRE,
                                       w->pw, w->ph, w->pw * 4, &err))
             {
-              clutter_actor_set_position (f->bmp, w->x, w->y);
+              clutter_actor_set_position (f->bmp, w->x, cy);
               clutter_actor_set_size (f->bmp, w->pw, w->ph);
+              {
+                const float k = phe_decor_scale (w->id, w->pw, w->ph);
+                clutter_actor_set_pivot_point (f->bmp, 0, 0);
+                clutter_actor_set_scale (f->bmp, k, k);
+              }
               if (w->pw > 0 && w->ph > 0)
                 {
                   /* (once per window) the import proof: the content's size and its centre pixel, BGRA */
@@ -430,6 +452,13 @@ frame_registry (int content)
     if (list->n < 0) { LOG ("[cluttertest-frame] registry: %d", list->n); g_free (list); return; }
     frame_show (list);
   }
+}
+
+/* phedecor.c: list and composite again now (a minimise is the frame's own change: no registry event follows) */
+void
+phe_frame_relist (void)
+{
+  frame_registry (0);
 }
 
 /* after each paint of the compositor's stage: its frame rate, and the pixel check (its (10,10) and (1010,10), three times once a GPU

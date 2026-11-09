@@ -27,6 +27,7 @@ extern int phe_decor_ping (int id);
 extern int phe_decor_resize (int id, int x, int y, int w, int h);
 extern void phe_decor_kill (int id);
 extern void phe_log (const char *msg);
+extern void phe_frame_relist (void);
 extern void (*clutter_symbian_decor_hook) (int content);
 
 enum { ACT_CLOSE = 1, ACT_MINIMISE = 2, ACT_MAXIMISE = 3, ACT_FOCUS = 4, ACT_RAISE = 5 };   /* TPheWinAction (phewinreg.h) */
@@ -44,6 +45,54 @@ typedef struct {
 static ClutterActor *stage;
 static GList *decors;
 static int logged;
+
+/* a window gets a bar: a titled normal window or dialog, not full screen, wide enough for its buttons */
+static gboolean
+decorated (const PheDecorWin *w)
+{
+  return !(w->state & ST_FULLSCREEN) && (w->type == TYPE_NORMAL || w->type == TYPE_DIALOG) && w->w >= 3 * BTN_W
+         && w->title[0] && w->title[0] != '<';
+}
+
+static GHashTable *decorated_ids;
+static GHashTable *minimised;         /* id -> 1: minimised while focused; 2: seen unfocused since; a focus after that restores it */
+
+/* scale-to-fit: 1:1 when bar + window fit the screen, else min ((screen h - bar) / h, screen w / w) */
+static float
+fit (int w, int h)
+{
+  gfloat sw = 0, sh = 0, s = 1;
+  if (stage)
+    clutter_actor_get_size (stage, &sw, &sh);
+  if (sw <= 0 || sh <= 0 || w <= 0 || h <= 0)
+    return 1;
+  if ((sh - BAR_H) / h < s)
+    s = (sh - BAR_H) / h;
+  if (sw / w < s)
+    s = sw / w;
+  return s;
+}
+
+/* the frame's compositing: the scale to show window id at (1 = undecorated or fits) */
+float
+phe_decor_scale (int id, int w, int h)
+{
+  return decorated_ids && g_hash_table_contains (decorated_ids, GINT_TO_POINTER (id)) ? fit (w, h) : 1;
+}
+
+/* the frame's compositing: FALSE = window id is minimised (its content is not shown) */
+int
+phe_decor_shown (int id)
+{
+  return !minimised || !g_hash_table_contains (minimised, GINT_TO_POINTER (id));
+}     /* id -> 1 for the windows decorated at the last refresh */
+
+/* the frame's compositing: the y to show window id's content at (a decorated window below its bar, the bar on screen) */
+int
+phe_decor_content_y (int id, int y)
+{
+  return decorated_ids && g_hash_table_contains (decorated_ids, GINT_TO_POINTER (id)) && y < BAR_H ? BAR_H : y;
+}
 
 static ClutterActor *
 find_stage (void)
@@ -92,7 +141,11 @@ on_button (ClutterActor *actor, ClutterEvent *event, gpointer data)
         r = phe_decor_action (id, ACT_CLOSE);
       break;
     case ACT_MINIMISE:
+      /* the frame's policy (the owner leaves minimise to the frame): hidden here and in the compositing until focused again */
       r = phe_decor_action (id, ACT_MINIMISE);
+      g_hash_table_insert (minimised, GINT_TO_POINTER (id), GINT_TO_POINTER (1));
+      clutter_actor_hide (d->bar);
+      phe_frame_relist ();
       break;
     case ACT_MAXIMISE:
       {
@@ -128,10 +181,28 @@ button (Decor *d, const char *label, int what)
   ClutterActor *b = clutter_actor_new (), *t;
 
   colour (&fg, 0xFFFFFF);
-  t = clutter_text_new_full ("Sans 16", label, &fg);
+  if (label)
+    t = clutter_text_new_full ("Sans 16", label, &fg);
+  else
+    {
+      /* the maximise glyph as an outlined square (the UI font has no U+25A1) */
+      ClutterActor *in = clutter_actor_new ();
+      t = clutter_actor_new ();
+      clutter_actor_set_size (t, 14, 14);
+      clutter_actor_set_background_color (t, &fg);
+      clutter_actor_set_size (in, 10, 10);
+      clutter_actor_set_position (in, 2, 2);
+      clutter_actor_add_child (t, in);
+      g_object_set_data (G_OBJECT (b), "phedecor-inner", in);
+    }
   clutter_actor_set_size (b, BTN_W, BAR_H);
   clutter_actor_add_child (b, t);
-  clutter_actor_add_constraint (t, clutter_align_constraint_new (b, CLUTTER_ALIGN_BOTH, 0.5));
+  {
+    /* centred in the button by its own size (an align constraint on the parent added the parent's offset twice) */
+    gfloat tw, th;
+    clutter_actor_get_preferred_size (t, NULL, NULL, &tw, &th);
+    clutter_actor_set_position (t, (BTN_W - tw) / 2, (BAR_H - th) / 2);
+  }
   clutter_actor_set_reactive (b, TRUE);
   g_object_set_data (G_OBJECT (b), "phedecor-id", GINT_TO_POINTER (d->id));
   g_signal_connect (b, "button-press-event", G_CALLBACK (on_button), GINT_TO_POINTER (what));
@@ -153,9 +224,10 @@ decor_new (int id)
   colour (&fg, 0xFFFFFF);
   d->title = clutter_text_new_full ("Sans 16", "", &fg);
   clutter_actor_set_position (d->title, 12, (BAR_H - 22) / 2);
+  clutter_text_set_ellipsize (CLUTTER_TEXT (d->title), PANGO_ELLIPSIZE_END);
   clutter_actor_add_child (d->bar, d->title);
   d->bmin = button (d, "\xe2\x80\x93", ACT_MINIMISE);       /* en dash */
-  d->bmax = button (d, "\xe2\x96\xa1", ACT_MAXIMISE);       /* white square */
+  d->bmax = button (d, NULL, ACT_MAXIMISE);                 /* outlined square */
   d->bclose = button (d, "\xc3\x97", ACT_CLOSE);            /* multiplication sign */
   clutter_actor_add_child (stage, d->bar);
   decors = g_list_append (decors, d);
@@ -184,14 +256,29 @@ refresh (void)
     return;
   for (l = decors; l; l = l->next)
     ((Decor *) l->data)->seen = FALSE;
+  if (!decorated_ids)
+    decorated_ids = g_hash_table_new (NULL, NULL);
+  g_hash_table_remove_all (decorated_ids);
+  for (i = 0; i < n; i++)
+    if (decorated (&w[i]))
+      g_hash_table_add (decorated_ids, GINT_TO_POINTER (w[i].id));
   for (i = 0; i < n; i++)
     {
       Decor *d;
       ClutterColor bg;
       char title[96];
-      int bx = w[i].w - 3 * BTN_W, by;
-      if ((w[i].state & ST_FULLSCREEN) || (w[i].type != TYPE_NORMAL && w[i].type != TYPE_DIALOG) || w[i].w < 3 * BTN_W)
-        continue;                           /* full screen, menus, notifications, splash: no decoration */
+      int bw = (int) (w[i].w * fit (w[i].w, w[i].h)), bx = bw - 3 * BTN_W, by;
+      if (!decorated (&w[i]))
+        continue;                           /* full screen, menus, notifications, splash, untitled: no decoration */
+      if (g_hash_table_contains (minimised, GINT_TO_POINTER (w[i].id)))
+        {
+          if (!(w[i].state & ST_FOCUSED))
+            g_hash_table_insert (minimised, GINT_TO_POINTER (w[i].id), GINT_TO_POINTER (2));
+          if (!(w[i].state & ST_FOCUSED) || GPOINTER_TO_INT (g_hash_table_lookup (minimised, GINT_TO_POINTER (w[i].id))) == 1)
+            continue;                       /* still minimised: no bar (its Decor goes) */
+          g_hash_table_remove (minimised, GINT_TO_POINTER (w[i].id));   /* focused again (a switcher): restored */
+          LOG ("[phedecor] window %d restored (focused)", w[i].id);
+        }
       d = decor_of (w[i].id);
       if (d == NULL)
         d = decor_new (w[i].id);
@@ -199,12 +286,16 @@ refresh (void)
       d->x = w[i].x; d->y = w[i].y; d->w = w[i].w; d->h = w[i].h;
       d->no_ping = w[i].no_ping;
       d->hung = !w[i].no_ping && w[i].ping_pending && w[i].ping_age_ms > HUNG_MS;   /* not ping-capable: never hung */
-      /* above the window when there is room, else over its top edge (the frame places content at the registry geometry) */
-      by = w[i].y >= BAR_H ? w[i].y - BAR_H : w[i].y;
+      /* directly above the window, same width; the frame shows a window that starts under BAR_H lower (phe_decor_content_y) */
+      by = (w[i].y < BAR_H ? BAR_H : w[i].y) - BAR_H;
+      clutter_actor_show (d->bar);
       clutter_actor_set_position (d->bar, w[i].x, by);
-      clutter_actor_set_size (d->bar, w[i].w, BAR_H);
+      clutter_actor_set_size (d->bar, bw, BAR_H);   /* the window's shown width */
       colour (&bg, d->hung ? 0x6A6A6A : (w[i].state & ST_FOCUSED) ? 0x1C51AF : 0x3A3A3A);
       clutter_actor_set_background_color (d->bar, &bg);
+      /* the inner of the maximise square takes the bar colour (an outline); the title stops before the buttons */
+      clutter_actor_set_background_color (g_object_get_data (G_OBJECT (d->bmax), "phedecor-inner"), &bg);
+      clutter_actor_set_width (d->title, bx - 12 - 8);
       snprintf (title, sizeof title, "%s%s", w[i].title, d->hung ? " (not responding)" : "");
       clutter_text_set_text (CLUTTER_TEXT (d->title), title);
       clutter_actor_set_position (d->bmin, bx, 0);
@@ -268,7 +359,7 @@ phe_decor_hit (float x, float y)
       if (!clutter_actor_is_visible (d->bar))
         continue;
       clutter_actor_get_position (d->bar, &bx, &by);
-      if (x >= bx && x < bx + d->w && y >= by && y < by + BAR_H)
+      if (x >= bx && x < bx + clutter_actor_get_width (d->bar) && y >= by && y < by + BAR_H)
         return d->id;
     }
   return 0;
@@ -277,6 +368,7 @@ phe_decor_hit (float x, float y)
 void
 phe_decor_install (void)
 {
+  minimised = g_hash_table_new (NULL, NULL);
   clutter_symbian_decor_hook = on_registry;
   g_timeout_add (2000, ping_tick, NULL);
 }
