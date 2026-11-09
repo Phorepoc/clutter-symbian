@@ -45,6 +45,8 @@ namespace
 	TInt gWtSeen = -1;
 	TReq gRn, gRc;		// a compositor's registry waits in this wait set (hildon-port.md 7.49): changes (Notify), content ticks (ContentNotify)
 	TUint gRnSeen = 1, gRcSeen;
+	TReq gRa;			// an owner's wait for the frames' actions on its windows (hildon-port.md 7.64): ActionNotify
+	TInt gPongs;			// pings answered (bounded log)
 	TThreadId gMainId;
 
 	// the poll helper
@@ -212,7 +214,7 @@ extern "C" void phe_clws_window_destroy(void* aW)
 
 extern "C" int phe_clws_pending(void)
 	{
-	return gUp && (gEv.Done() || gRd.Done() || gWt.Done() || gRn.Done() || gRc.Done());
+	return gUp && (gEv.Done() || gRd.Done() || gWt.Done() || gRn.Done() || gRc.Done() || gRa.Done());
 	}
 
 static int Translate(const TWsEvent& aWs, PheClwsEvent* aEv)
@@ -277,6 +279,28 @@ extern "C" int phe_clws_next_event(PheClwsEvent* aEv)
 		gWt.Issue(); gReg.Watchers(gWtSeen, gWt.iSt);
 		memset(aEv, 0, sizeof *aEv);
 		aEv->type = PHE_CLWS_WATCHERS; aEv->x = n;
+		return 1;
+		}
+	if (gRa.Done())
+		{
+		extern RPheWinReg gReg;
+		Settle(gRa);
+		const TInt v = gRa.iSt.Int();
+		gRa.iActive = EFalse;
+		if (v < 0)
+			return 0;						// (the registry went away)
+		gRa.Issue(); gReg.ActionNotify(gRa.iSt);
+		if (PheWinActionCode(v) == EPheWinActPing)
+			{
+			// answered here, on the main loop's dispatch: a loop that stops dispatching stops answering, and the frame sees the
+			// unanswered pings age (not responding)
+			const TInt r = gReg.Pong(PheWinActionId(v));
+			if (gPongs++ < 4)
+				RDebug::Printf("[clutter-symbian] registry: ping for window %d answered (%d)", PheWinActionId(v), r);
+			return phe_clws_next_event(aEv);
+			}
+		memset(aEv, 0, sizeof *aEv);
+		aEv->type = PHE_CLWS_REG_ACTION; aEv->x = PheWinActionId(v); aEv->y = PheWinActionCode(v);
 		return 1;
 		}
 	if (gRn.Done() || gRc.Done())
@@ -384,9 +408,9 @@ extern "C" int phe_clws_poll(PheClwsPollFD* aFds, unsigned aN, int aTimeout)
 		gJobFds = fds; gJobN = n + 1; gJobTimeout = timed ? -1 : aTimeout; gJobSt = &gSel.iSt; gJobPosted = ETrue;
 		pthread_cond_signal(&gCv);
 		pthread_mutex_unlock(&gMx);
-		TReq* all[7] = { &gSel, &gEv, &gRd, &gWt, &gTm, &gRn, &gRc };
+		TReq* all[8] = { &gSel, &gEv, &gRd, &gWt, &gTm, &gRn, &gRc, &gRa };
 		const TUint32 w0 = User::FastCounter();
-		WaitAny(all, 7);
+		WaitAny(all, 8);
 		phe_clws_wait_us += WaitUs(User::FastCounter() - w0);
 		if (timed)
 			{
@@ -441,6 +465,7 @@ static TInt RegConnect()
 	if (gRegUp)
 		{
 		gWt.Issue(); gReg.Watchers(-1, gWt.iSt);		// the count now, then each change (an event: PHE_CLWS_WATCHERS)
+		gRa.Issue(); gReg.ActionNotify(gRa.iSt);		// the frames' actions on our windows (an event: PHE_CLWS_REG_ACTION)
 		}
 	return r;
 	}
@@ -514,6 +539,33 @@ extern "C" int phe_clws_reg_content_gpu(int aId, int aToken, int aW, int aH, int
 	if (!gRegUp)
 		return KErrNotReady;
 	return gReg.Content(aId, 0, TRect(TPoint(aDx, aDy), TSize(aDw, aDh)), aToken);
+	}
+
+extern "C" int phe_clws_reg_hints(int aId, int aMinW, int aMinH, int aMaxW, int aMaxH, int aPrefW, int aPrefH, int aIcon)
+	{
+	if (!gRegUp)
+		return KErrNotReady;
+	TPheWinHints h;
+	h.iId = aId;
+	h.iMinSize = TSize(aMinW, aMinH);
+	h.iMaxSize = TSize(aMaxW, aMaxH);
+	h.iPreferredSize = TSize(aPrefW, aPrefH);
+	h.iIcon = aIcon;
+	return gReg.SetHints(h);
+	}
+
+extern "C" int phe_clws_reg_requested(int aId, int* aX, int* aY, int* aW, int* aH)
+	{
+	if (!gRegUp)
+		return KErrNotReady;
+	TPheWinHints h;
+	const TInt r = gReg.Hints(aId, h);
+	if (r != KErrNone)
+		return r;
+	if (h.iRequested.IsEmpty())
+		return KErrNotFound;
+	*aX = h.iRequested.iTl.iX; *aY = h.iRequested.iTl.iY; *aW = h.iRequested.Width(); *aH = h.iRequested.Height();
+	return KErrNone;
 	}
 
 // a compositor (hildon-port.md 7.49): registry changes and content ticks arrive as events of this wait set (PHE_CLWS_REG_CHANGED /

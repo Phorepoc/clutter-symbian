@@ -541,6 +541,8 @@ frame_main (void)
   return 0;
 }
 
+extern int phe_owner_spawn (void);
+
 int
 phe_clutter_main (void)
 {
@@ -555,7 +557,16 @@ phe_clutter_main (void)
   phe_clws_screen_size (&width, &height);
   stage = clutter_stage_new ();                            /* the backend makes its window: full screen, in the screen's current mode */
   clutter_stage_set_title (CLUTTER_STAGE (stage), "cluttertest");
-  clutter_stage_set_fullscreen (CLUTTER_STAGE (stage), TRUE);
+  if (phe_cmd_has ("owner"))
+    {
+      /* the owner-side test (hildon-port.md 7.64): a resizable window, not full screen; a second process plays the frame */
+      clutter_stage_set_user_resizable (CLUTTER_STAGE (stage), TRUE);
+      clutter_stage_set_minimum_size (CLUTTER_STAGE (stage), 200, 150);
+      clutter_actor_set_size (stage, 400, 300);
+      LOG ("[cluttertest] owner test: check process started (%d)", phe_owner_spawn ());
+    }
+  else
+    clutter_stage_set_fullscreen (CLUTTER_STAGE (stage), TRUE);
   g_signal_connect (stage, "button-press-event", G_CALLBACK (on_press), NULL);
   g_signal_connect (stage, "motion-event", G_CALLBACK (on_motion), NULL);
   g_signal_connect (stage, "key-press-event", G_CALLBACK (on_key), NULL);

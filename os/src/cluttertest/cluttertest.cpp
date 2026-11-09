@@ -12,9 +12,21 @@ extern "C" void phe_log(const char* aMsg) { RDebug::Printf("%s", aMsg); }
 extern "C" int phe_clutter_main(void);
 extern "C" int phe_is_frame(void);
 
+static TInt OwnerCheck();
+
 GLDEF_C TInt E32Main()
 	{
 	CTrapCleanup* cleanup = CTrapCleanup::New();
+	{
+	TBuf<16> cmd;
+	User::CommandLine(cmd);
+	if (cmd.Find(_L("ownercheck")) == 0)		// the owner-side check's second process (no Clutter)
+		{
+		const TInt r = OwnerCheck();
+		delete cleanup;
+		return r;
+		}
+	}
 	setenv("FONTCONFIG_FILE", "z:/resource/phehome/fonts.conf", 1);
 	RDebug::Printf("[cluttertest] start");
 	TInt rc = 0;
@@ -109,6 +121,14 @@ extern "C" int phe_frame_spawn(void)
 	return r;
 	}
 
+extern "C" int phe_owner_spawn(void)
+	{
+	RProcess p;
+	TInt r = p.Create(_L("cluttertest.exe"), _L("ownercheck"));
+	if (r == KErrNone) { p.Resume(); p.Close(); }
+	return r;
+	}
+
 extern "C" int phe_is_frame(void)
 	{
 	TBuf<16> cmd;
@@ -124,4 +144,71 @@ extern "C" int phe_cmd_has(const char* aWord)
 	TBuf<32> w;
 	w.Copy(TPtrC8((const TUint8*)aWord));
 	return cmd.Find(w) >= 0;
+	}
+
+// ======================================================================== the owner side of the backend (hildon-port.md 7.64)
+// "cluttertest|owner" runs a resizable 400x300 stage (minimum 200x150) and starts "cluttertest ownercheck", which plays a frame
+// with the registry API only: it finds the stage's window, checks the hints the backend set, sends a resize (clamped by the
+// registry) and expects the backend's Update with the new size, pings and expects the main loop's pong, and sends focus.
+#define OCHECK(c) do { if (!(c)) { RDebug::Printf("[cluttertest-owner] FAIL line %d: %s", __LINE__, #c); return KErrGeneral; } } while (0)
+
+static TInt OwnerFind(RPheWinReg& aReg, TPheWinInfo& aOut)
+	{
+	TPheWinInfo list[8];
+	TPtr8 p((TUint8*)list, 0, sizeof list);
+	const TInt n = aReg.List(p);
+	for (TInt i = 0; i < n && i < 8; ++i)
+		if (list[i].iTitle == _L("cluttertest"))
+			{ aOut = list[i]; return KErrNone; }
+	return KErrNotFound;
+	}
+
+static TInt OwnerCheck()
+	{
+	RPheWinReg reg;
+	OCHECK(reg.Connect() == KErrNone);
+	TPheWinInfo w;
+	TInt tries = 0;
+	for (; tries < 100 && OwnerFind(reg, w) != KErrNone; ++tries)
+		User::After(100000);
+	OCHECK(tries < 100);
+	OCHECK(reg.Subscribe(w.iId, EPheWinWatch) == KErrNone);
+	TPheWinHints h;
+	for (tries = 0; tries < 50; ++tries)		// (the hints follow the stage's resize / minimum size calls)
+		{
+		OCHECK(reg.Hints(w.iId, h) == KErrNone);
+		if (h.iMinSize == TSize(200, 150) && h.iPreferredSize == TSize(400, 300))
+			break;
+		User::After(100000);
+		}
+	RDebug::Printf("[cluttertest-owner] window %d: %dx%d, min %dx%d max %dx%d preferred %dx%d", w.iId, w.iGeometry.Width(), w.iGeometry.Height(),
+		h.iMinSize.iWidth, h.iMinSize.iHeight, h.iMaxSize.iWidth, h.iMaxSize.iHeight, h.iPreferredSize.iWidth, h.iPreferredSize.iHeight);
+	OCHECK(tries < 50);
+	OCHECK(h.iMaxSize == TSize(0, 0));								// user-resizable: no maximum
+
+	OCHECK(reg.Resize(w.iId, TRect(TPoint(0, 0), TSize(500, 100))) == KErrNone);	// 100 high: the registry clamps it to 150
+	for (tries = 0; tries < 50; ++tries)
+		{
+		OCHECK(OwnerFind(reg, w) == KErrNone);
+		if (w.iGeometry.Size() == TSize(500, 150))
+			break;
+		User::After(100000);
+		}
+	RDebug::Printf("[cluttertest-owner] after resize: %dx%d", w.iGeometry.Width(), w.iGeometry.Height());
+	OCHECK(tries < 50);
+
+	OCHECK(reg.Ping(w.iId) == KErrNone);
+	for (tries = 0; tries < 50; ++tries)
+		{
+		OCHECK(reg.Hints(w.iId, h) == KErrNone);
+		if (h.iPingPending == 0)
+			break;
+		User::After(20000);
+		}
+	RDebug::Printf("[cluttertest-owner] ping answered after ~%d ms", tries * 20);
+	OCHECK(tries < 50);
+	OCHECK(reg.Action(w.iId, EPheWinActFocus) == KErrNone);
+	RDebug::Printf("[cluttertest-owner] PASS: hints from the stage (min, preferred, resizable), resize -> stage -> Update, ping -> pong on the main loop, focus sent");
+	reg.Close();
+	return KErrNone;
 	}

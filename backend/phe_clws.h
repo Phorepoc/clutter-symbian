@@ -13,7 +13,9 @@ enum { PHE_CLWS_NONE = 0, PHE_CLWS_KEY_DOWN = 1, PHE_CLWS_KEY = 2, PHE_CLWS_KEY_
        PHE_CLWS_FOCUS_IN = 7, PHE_CLWS_FOCUS_OUT = 8,
        PHE_CLWS_WATCHERS = 9 /* a subscription to one of our registry windows changed: x = the owner's subscription serial (C4, 7.48) */,
        PHE_CLWS_REG_CHANGED = 10 /* a compositor: the registry changed (list it again); x = the serial (7.49) */,
-       PHE_CLWS_REG_CONTENT = 11 /* a compositor: a GPU window published its next frame (redraw); x = the content tick (7.49) */ };
+       PHE_CLWS_REG_CONTENT = 11 /* a compositor: a GPU window published its next frame (redraw); x = the content tick (7.49) */,
+       PHE_CLWS_REG_ACTION = 12 /* an owner: a frame's action on one of our registry windows: x = the window id, y = TPheWinAction / EPheWinActResize
+                                   (pings never arrive: phe_clws answers them itself, on the main loop, hildon-port.md 7.64) */ };
 /* pointer types = TPointerEvent::TType: 0 button1 down, 1 button1 up, 2 button2 down, 3 up, 4 button3 down, 5 up, 6 drag, 7 move */
 typedef struct {
   int type;
@@ -61,6 +63,10 @@ int phe_clws_frame_watch (void);
 int phe_clws_reg_list (void *buf, int bytes);
 int phe_clws_reg_subscribe (int id, int mode);
 int phe_clws_reg_pointer (int id, int type, int x, int y);
+/* an owner (C5): window id's size hints (0 = no limit / no preference) and icon (an FBSERV bitmap handle, 0 = none); the geometry a
+   frame's last resize action asked for (after the registry clamped it to the hints) */
+int phe_clws_reg_hints (int id, int min_w, int min_h, int max_w, int max_h, int pref_w, int pref_h, int icon);
+int phe_clws_reg_requested (int id, int *x, int *y, int *w, int *h);
 
 #ifdef __cplusplus
 }

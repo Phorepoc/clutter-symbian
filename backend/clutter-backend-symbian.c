@@ -76,6 +76,7 @@ typedef struct {
   gint width, height;            /* the window size when not full-screen */
   gchar *title;
   gint reg_id;                   /* the window registry's id (C4: phewinreg), 0 = not registered, < 0 = no registry */
+  gint reg_icon;                 /* the window's icon for the frame (an FBSERV bitmap handle, clutter_symbian_stage_set_icon), 0 = none */
   gint reg_watchers;             /* frame processes subscribed to this window (the registry tells), 0 = publish nothing */
   gboolean reg_composited;       /* a frame process composites it: off the window server's screen, no present (7.48) */
   guchar *reg_pixels;
@@ -236,6 +237,10 @@ stage_target_size (ClutterStageSymbian *self, gint *w, gint *h)
 
 #define REG_FULLSCREEN 1   /* EPheWinFullscreen */
 #define REG_HIDDEN 8       /* EPheWinHidden */
+#define REG_ACT_CLOSE 1    /* TPheWinAction (phewinreg.h): EPheWinActClose, ..Focus, ..Raise, EPheWinActResize */
+#define REG_ACT_FOCUS 4
+#define REG_ACT_RAISE 5
+#define REG_ACT_RESIZE 6
 
 /* this window's subscriptions now (hildon-port.md 7.48: per window, not a global count); TRUE = a frame process just came */
 static gboolean
@@ -260,6 +265,40 @@ stage_reg_subs (ClutterStageSymbian *self)
         clutter_actor_queue_redraw (CLUTTER_ACTOR (cogl->wrapper));
     }
   return started;
+}
+
+/* the owner's size hints for the frame (C5, hildon-port.md 7.64): the stage's minimum size; a stage that is not user-resizable keeps its
+   size (max = min = now); the size the application asked for is the preferred one */
+static void
+stage_reg_hints (ClutterStageSymbian *self)
+{
+  ClutterStageCogl *cogl = CLUTTER_STAGE_COGL (self);
+  guint min_w = 0, min_h = 0;
+  gint w, h, max_w = 0, max_h = 0;
+
+  if (self->reg_id <= 0 || cogl->onscreen == NULL || cogl->wrapper == NULL)
+    return;
+  w = cogl_framebuffer_get_width (COGL_FRAMEBUFFER (cogl->onscreen));
+  h = cogl_framebuffer_get_height (COGL_FRAMEBUFFER (cogl->onscreen));
+  clutter_stage_get_minimum_size (cogl->wrapper, &min_w, &min_h);
+  if (!clutter_stage_get_user_resizable (cogl->wrapper))
+    {
+      min_w = max_w = w;
+      min_h = max_h = h;
+    }
+  phe_clws_reg_hints (self->reg_id, min_w, min_h, max_w, max_h, self->width > 0 ? self->width : w, self->height > 0 ? self->height : h,
+                      self->reg_icon);
+}
+
+void
+clutter_symbian_stage_set_icon (ClutterStage *stage, int fbs_bitmap_handle)
+{
+  ClutterStageWindow *win = _clutter_stage_get_window (stage);
+
+  if (win == NULL || !CLUTTER_IS_STAGE_SYMBIAN (win))
+    return;
+  CLUTTER_STAGE_SYMBIAN (win)->reg_icon = fbs_bitmap_handle;
+  stage_reg_hints (CLUTTER_STAGE_SYMBIAN (win));
 }
 
 static void
@@ -442,6 +481,7 @@ stage_reg_show (ClutterStageSymbian *self)
       self->reg_id = phe_clws_reg_window (self->title, 0, 0, 0, cogl_framebuffer_get_width (COGL_FRAMEBUFFER (cogl->onscreen)),
                                           cogl_framebuffer_get_height (COGL_FRAMEBUFFER (cogl->onscreen)), self->fullscreen ? REG_FULLSCREEN : 0);
       stage_reg_subs (self);
+      stage_reg_hints (self);
       LOG ("[clutter-symbian] registry: stage '%s' is window %d", self->title ? self->title : "", self->reg_id);
       if (self->reg_id > 0 && cogl->wrapper)
         {
@@ -558,6 +598,7 @@ clutter_stage_symbian_resize (ClutterStageWindow *stage_window, gint width, gint
   self->width = width; self->height = height;
   if (!self->fullscreen)
     stage_apply_size (self);
+  stage_reg_hints (self);     /* (the preferred size, and a fixed-size stage's limits, moved) */
 }
 
 static void
@@ -596,6 +637,9 @@ clutter_stage_symbian_set_cursor_visible (ClutterStageWindow *stage_window, gboo
 static void
 clutter_stage_symbian_set_user_resizable (ClutterStageWindow *stage_window, gboolean is_resizable)
 {
+  /* WSERV has no user resizing; the frame process does it (a resize action), within the hints this changes. (ClutterStage stores
+     the flag before it calls here.) */
+  stage_reg_hints (CLUTTER_STAGE_SYMBIAN (stage_window));
 }
 
 static gboolean
@@ -846,6 +890,58 @@ translate_pointer (ClutterBackend *backend, const PheClwsEvent *e)
   _clutter_event_push (event, FALSE);
 }
 
+/* a frame's action on one of our registry windows (C5, hildon-port.md 7.64; pings are answered inside phe_clws) */
+static void
+reg_action (ClutterBackend *backend, int id, int action)
+{
+  ClutterStageSymbian *self = NULL;
+  ClutterStageCogl *cogl;
+  GSList *l;
+  static int logged;
+
+  for (l = all_stages; l != NULL; l = l->next)
+    if (((ClutterStageSymbian *) l->data)->reg_id == id)
+      self = l->data;
+  if (logged++ < 16)
+    LOG ("[clutter-symbian] registry: action %d on window %d (%s)", action, id, self ? "ours" : "no stage");
+  if (self == NULL)
+    return;
+  cogl = CLUTTER_STAGE_COGL (self);
+  switch (action)
+    {
+    case REG_ACT_RESIZE:
+      {
+        /* the frame's size (already clamped to our hints): the stage takes it as the application's size, and its Update answers */
+        int x, y, w, h;
+        if (phe_clws_reg_requested (id, &x, &y, &w, &h) == 0 && !self->fullscreen)
+          {
+            self->width = w; self->height = h;
+            stage_apply_size (self);
+            stage_reg_meta (self);
+            stage_reg_hints (self);
+          }
+        break;
+      }
+    case REG_ACT_FOCUS: case REG_ACT_RAISE:
+      /* our window group to the front: WSERV gives it the keyboard focus (a FOCUS_IN event follows) */
+      if (cogl->onscreen)
+        phe_clws_window_raise (cogl_symbian_onscreen_get_window (cogl->onscreen), window_priority ());
+      break;
+    case REG_ACT_CLOSE:
+      {
+        /* the close button: a delete event, as a window manager's WM_DELETE_WINDOW (the application decides; the default hides) */
+        ClutterEvent *ev = clutter_event_new (CLUTTER_DELETE);
+        ev->any.stage = cogl->wrapper;
+        ev->any.time = 0;
+        _clutter_event_push (ev, FALSE);
+        break;
+      }
+    default:
+      /* minimise / maximise: the frame's policy (it hides or sizes the window and tells us through resize) */
+      break;
+    }
+}
+
 static void
 translate (ClutterBackend *backend, const PheClwsEvent *e)
 {
@@ -883,6 +979,9 @@ translate (ClutterBackend *backend, const PheClwsEvent *e)
       /* a compositor's registry events (hildon-port.md 7.49), on the main loop: to the application's hook */
       if (clutter_symbian_registry_hook)
         clutter_symbian_registry_hook (e->type == PHE_CLWS_REG_CONTENT);
+      break;
+    case PHE_CLWS_REG_ACTION:
+      reg_action (backend, e->x, e->y);
       break;
     case PHE_CLWS_WATCHERS:
       {
