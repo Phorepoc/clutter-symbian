@@ -328,6 +328,13 @@ extern "C" int phe_clws_next_event(PheClwsEvent* aEv)
 
 extern "C" void phe_clws_set_inner_poll(PheClwsPollFunc aInner) { gInner = aInner; }
 
+// this thread's CPU time in us (RThread::GetCpuTime), or -1 when the kernel does not measure it (hildon-port.md 7.54)
+extern "C" long long phe_clws_thread_cpu_us(void)
+	{
+	TTimeIntervalMicroSeconds t;
+	return RThread().GetCpuTime(t) == KErrNone ? t.Int64() : -1;
+	}
+
 // time blocked in the wait set, for the backend's bounded frame profile (hildon-port.md 7.50)
 extern "C" { unsigned long long phe_clws_wait_us; }
 static unsigned long long WaitUs(TUint32 aTicks)

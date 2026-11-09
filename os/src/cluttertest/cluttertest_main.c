@@ -362,7 +362,8 @@ static gint64 frame_tick_first, frame_pre, frame_post, frame_after;
 static gint64 frame_sum_lat, frame_sum_upd, frame_sum_swap, frame_sum_idle;
 static int frame_lat_n;
 extern gint64 phe_cogl_swap_enter_us, phe_cogl_swap_sum_us;   /* the Cogl overlay's swap timing (7.53) */
-static gint64 frame_sum_flush, frame_sum_eglswap, frame_swap0;
+static gint64 frame_sum_flush, frame_sum_eglswap, frame_swap0, frame_cpu_after, frame_sum_cpu;
+extern long long phe_clws_thread_cpu_us (void);
 static void
 frame_registry (int content)
 {
@@ -416,6 +417,8 @@ frame_post_paint (gpointer data)
   if (frame_after && frame_after <= now && frame_after >= frame_pre)
     {
       frame_sum_swap += now - frame_after;
+      if (frame_cpu_after >= 0)
+        frame_sum_cpu += phe_clws_thread_cpu_us () - frame_cpu_after;
       if (phe_cogl_swap_enter_us >= frame_after)
         frame_sum_flush += phe_cogl_swap_enter_us - frame_after;   /* Cogl: the journal flush before the winsys swap */
     }
@@ -438,6 +441,7 @@ frame_after_paint (ClutterActor *stage, gpointer data)
     }
   frame_frames++;
   frame_after = now;
+  frame_cpu_after = phe_clws_thread_cpu_us ();
   if (frame_paint_start && frame_paint_start <= now)
     frame_paint_sum += now - frame_paint_start;
   if (frame_pre && frame_paint_start >= frame_pre)
@@ -451,10 +455,11 @@ frame_after_paint (ClutterActor *stage, gpointer data)
       LOG ("[cluttertest-frame] phases us/frame: tick->clock %d, update (pre-paint..paint) %d, swap+post %d, idle %d",
            frame_lat_n ? (int) (frame_sum_lat / frame_lat_n) : 0, (int) (frame_sum_upd / frame_frames),
            (int) (frame_sum_swap / frame_frames), (int) (frame_sum_idle / frame_frames));
-      LOG ("[cluttertest-frame] swap+post split us/frame: journal flush %d, EGL swap %d, after the swap %d",
+      LOG ("[cluttertest-frame] swap+post split us/frame: journal flush %d, EGL swap %d, after the swap %d; this thread's CPU in swap+post %d (-1 = not measured)",
            (int) (frame_sum_flush / frame_frames), (int) (frame_sum_eglswap / frame_frames),
-           (int) ((frame_sum_swap - frame_sum_flush - frame_sum_eglswap) / frame_frames));
-      frame_sum_flush = frame_sum_eglswap = 0;
+           (int) ((frame_sum_swap - frame_sum_flush - frame_sum_eglswap) / frame_frames),
+           frame_cpu_after >= 0 ? (int) (frame_sum_cpu / frame_frames) : -1);
+      frame_sum_flush = frame_sum_eglswap = frame_sum_cpu = 0;
       frame_sum_lat = frame_sum_upd = frame_sum_swap = frame_sum_idle = 0; frame_lat_n = 0;
       frame_frames = frame_ticks = frame_relists = 0;
       frame_paint_sum = 0;
