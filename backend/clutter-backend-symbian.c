@@ -370,8 +370,11 @@ stage_share_copy (ClutterStageSymbian *self, CoglFramebuffer *fb, gint w, gint h
   {
     /* bounded profile (7.49): per frame, the journal flush (the paint's GL calls + command buffer), the copy + flush, and the
        interval between frames; three summaries of 120 frames, then silent */
-    static gint64 last, sum_flush, sum_copy, sum_iv, sum_paint;
+    static gint64 last, sum_flush, sum_copy, sum_iv, sum_paint, other_us, wait0;
     static int n, batches;
+    extern unsigned long long phe_clws_wait_us;   /* phe_clws.cpp: time blocked in the wait set (the poll) */
+    if (batches < 3 && !self->fullscreen && self->prof_paint_start && self->prof_paint_start <= p2)
+      other_us += p2 - self->prof_paint_start;     /* another stage's paint + flush + copy */
     if (batches < 3 && self->fullscreen)   /* (the full-screen stage only: the counters are this one's) */
       {
         if (last)
@@ -380,13 +383,18 @@ stage_share_copy (ClutterStageSymbian *self, CoglFramebuffer *fb, gint w, gint h
             if (self->prof_paint_start && self->prof_paint_start <= p0)
               sum_paint += p0 - self->prof_paint_start;
           }
+        else
+          other_us = 0, wait0 = (gint64) phe_clws_wait_us;
         last = p0;
         if (n == 120)
           {
-            LOG ("[clutter-symbian] prof (120 frames, us/frame): interval %d = paint (stage paint signal .. after-paint) %d + journal flush %d"
-                 " + copy %d + the rest (layout, clock wait, other stages) %d", (int) (sum_iv / n), (int) (sum_paint / n), (int) (sum_flush / n),
-                 (int) (sum_copy / n), (int) ((sum_iv - sum_paint - sum_flush - sum_copy) / n));
-            sum_flush = sum_copy = sum_iv = sum_paint = 0; n = 0; batches++;
+            const gint64 wait = (gint64) phe_clws_wait_us - wait0;
+            LOG ("[clutter-symbian] prof (120 frames, us/frame): interval %d = paint %d + journal flush %d + copy %d + other stages %d"
+                 " + waiting in the poll %d + the rest (layout, dispatch) %d", (int) (sum_iv / n), (int) (sum_paint / n), (int) (sum_flush / n),
+                 (int) (sum_copy / n), (int) (other_us / n), (int) (wait / n),
+                 (int) ((sum_iv - sum_paint - sum_flush - sum_copy - other_us - wait) / n));
+            sum_flush = sum_copy = sum_iv = sum_paint = other_us = 0; n = 0; batches++;
+            wait0 = (gint64) phe_clws_wait_us;
           }
       }
   }

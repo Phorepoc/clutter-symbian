@@ -18,5 +18,5 @@ SOURCEPATH		../../../backend
 SOURCE			phe_clws.cpp
 USERINCLUDE		../../../backend
 USERINCLUDE		../../../../hildon-ui/os/src/phewinreg
-LIBRARY			euser.lib ws32.lib libc.lib libm.lib libpthread.lib pheglib.lib phegobject.lib phegmodule.lib phegthread.lib phepango.lib phecairo.lib pheatk.lib libEGL.lib libGLESv2.lib fbscli.lib
+LIBRARY			euser.lib ws32.lib libc.lib libm.lib libpthread.lib pheglib.lib phegobject.lib phegmodule.lib phegthread.lib phepango.lib phecairo.lib pheatk.lib libEGL.lib libGLESv2.lib fbscli.lib hal.lib
 SMPSAFE

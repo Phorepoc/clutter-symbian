@@ -375,6 +375,15 @@ frame_registry (int content)
 
 /* after each paint of the compositor's stage: its frame rate, and the pixel check (its (10,10) and (1010,10), three times once a GPU
    window is composited) */
+static gint64 frame_paint_start, frame_paint_sum, frame_wait0;
+extern unsigned long long phe_clws_wait_us;   /* the backend's time blocked in its wait set (7.50) */
+static void
+frame_paint (ClutterActor *stage, gpointer data)
+{
+  (void) stage; (void) data;
+  frame_paint_start = g_get_monotonic_time ();
+}
+
 static void
 frame_after_paint (ClutterActor *stage, gpointer data)
 {
@@ -382,13 +391,22 @@ frame_after_paint (ClutterActor *stage, gpointer data)
   gint64 now = g_get_monotonic_time ();
   (void) data; (void) stage;
   if (!frame_t0)
-    frame_t0 = now;
+    {
+      frame_t0 = now;
+      frame_wait0 = (gint64) phe_clws_wait_us;
+    }
   frame_frames++;
+  if (frame_paint_start && frame_paint_start <= now)
+    frame_paint_sum += now - frame_paint_start;
   if (now - frame_t0 >= 2000000)
     {
-      LOG ("[cluttertest-frame] %d composited frames in %d ms = %.1f fps (%d content ticks, %d lists)", frame_frames,
-           (int) ((now - frame_t0) / 1000), frame_frames * 1000000.0 / (now - frame_t0), frame_ticks, frame_relists);
+      const gint64 wait = (gint64) phe_clws_wait_us - frame_wait0;
+      LOG ("[cluttertest-frame] %d composited frames in %d ms = %.1f fps (%d content ticks, %d lists; per frame: paint %d us, waiting %d us)",
+           frame_frames, (int) ((now - frame_t0) / 1000), frame_frames * 1000000.0 / (now - frame_t0), frame_ticks, frame_relists,
+           (int) (frame_paint_sum / frame_frames), (int) (wait / frame_frames));
       frame_frames = frame_ticks = frame_relists = 0;
+      frame_paint_sum = 0;
+      frame_wait0 = (gint64) phe_clws_wait_us;
       frame_t0 = now;
     }
   if (frame_checks >= 3 || !frame_wins || !((FrameWin *) frame_wins->data)->token)
@@ -411,6 +429,7 @@ frame_main (void)
   clutter_actor_set_background_color (frame_stage, &bg);
   clutter_stage_set_fullscreen (CLUTTER_STAGE (frame_stage), TRUE);
   g_signal_connect (frame_stage, "after-paint", G_CALLBACK (frame_after_paint), NULL);
+  g_signal_connect (frame_stage, "paint", G_CALLBACK (frame_paint), NULL);
   clutter_actor_show (frame_stage);
   clutter_symbian_registry_hook = frame_registry;
   LOG ("[cluttertest-frame] up: compositing the registry's windows full screen (registry events: %d)", phe_clws_frame_watch ());

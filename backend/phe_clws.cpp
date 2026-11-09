@@ -13,6 +13,7 @@
 #include <e32std.h>
 #include <e32base.h>
 #include <e32debug.h>
+#include <hal.h>
 #include <w32std.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -327,6 +328,16 @@ extern "C" int phe_clws_next_event(PheClwsEvent* aEv)
 
 extern "C" void phe_clws_set_inner_poll(PheClwsPollFunc aInner) { gInner = aInner; }
 
+// time blocked in the wait set, for the backend's bounded frame profile (hildon-port.md 7.50)
+extern "C" { unsigned long long phe_clws_wait_us; }
+static unsigned long long WaitUs(TUint32 aTicks)
+	{
+	static TInt freq;
+	if (!freq && HAL::Get(HAL::EFastCounterFrequency, freq) != KErrNone)
+		freq = 1000;
+	return (unsigned long long)aTicks * 1000000ull / (unsigned)freq;
+	}
+
 extern "C" int phe_clws_poll(PheClwsPollFD* aFds, unsigned aN, int aTimeout)
 	{
 	// split: the WSERV pseudo descriptors are answered here, the real ones go to the helper (and the interrupt pipe after them)
@@ -363,7 +374,9 @@ extern "C" int phe_clws_poll(PheClwsPollFD* aFds, unsigned aN, int aTimeout)
 		pthread_cond_signal(&gCv);
 		pthread_mutex_unlock(&gMx);
 		TReq* all[7] = { &gSel, &gEv, &gRd, &gWt, &gTm, &gRn, &gRc };
+		const TUint32 w0 = User::FastCounter();
 		WaitAny(all, 7);
+		phe_clws_wait_us += WaitUs(User::FastCounter() - w0);
 		if (timed)
 			{
 			if (!gTm.Done())
