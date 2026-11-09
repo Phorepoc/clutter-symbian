@@ -38,5 +38,6 @@ grep -a "error" $O/errors.txt | sed "s|$S/||" | cut -c1-200 | head -${ERRN:-25}
 rm -f /wk/out/libclutter.a; ar rcs /wk/out/libclutter.a $O/*.o
 # the feasibility test's C half, and the archives where the emitter finds them
 $CC $FF -c /h/os/src/cluttertest/cluttertest_main.c -o $O/cluttertest_main.o 2> $O/errs.test || { grep -a error $O/errs.test | head; echo "TEST COMPILE FAIL"; }
-rm -f /wk/out/libcluttertest.a; ar rcs /wk/out/libcluttertest.a $O/cluttertest_main.o
+$CC $FF -c /h/os/src/cluttertest/phedecor.c -o $O/phedecor.o 2> $O/errs.decor || { grep -a error $O/errs.decor | head; echo "DECOR COMPILE FAIL"; }
+rm -f /wk/out/libcluttertest.a; ar rcs /wk/out/libcluttertest.a $O/cluttertest_main.o $O/phedecor.o
 for a in clutter cogl cogl-pango cogl-path json-glib cluttertest; do cp /wk/out/lib$a.a /o/lib$a.a; done; echo "archives copied to the build dir"

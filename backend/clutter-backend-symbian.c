@@ -48,6 +48,8 @@ ClutterBackend *clutter_backend_symbian_new (void);
 /* a compositor process (OURS, hildon-port.md 7.49): set this, then phe_clws_frame_watch (); the hook runs on the main loop with
    content = FALSE for a registry change (list again) and TRUE for a content-only update (redraw) */
 void (*clutter_symbian_registry_hook) (int content);
+/* a second listener on the same events: the frame's decorations (cluttertest phedecor.c), independent of the application's hook */
+void (*clutter_symbian_decor_hook) (int content);
 
 /* the GPU path of the registry content (hildon-port.md 7.47): EGL_SYMBIAN_SVGA_SHARE_PH images (mesa-symbian egl_symbian.c) */
 #include <EGL/egl.h>
@@ -979,6 +981,8 @@ translate (ClutterBackend *backend, const PheClwsEvent *e)
       /* a compositor's registry events (hildon-port.md 7.49), on the main loop: to the application's hook */
       if (clutter_symbian_registry_hook)
         clutter_symbian_registry_hook (e->type == PHE_CLWS_REG_CONTENT);
+      if (clutter_symbian_decor_hook)
+        clutter_symbian_decor_hook (e->type == PHE_CLWS_REG_CONTENT);
       break;
     case PHE_CLWS_REG_ACTION:
       reg_action (backend, e->x, e->y);
