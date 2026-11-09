@@ -41,6 +41,7 @@
 /* Cogl's symbian platform (overlay/cogl-winsys-egl-symbian.c) */
 void *cogl_symbian_onscreen_get_window (CoglOnscreen *onscreen);
 void cogl_symbian_onscreen_resize (CoglOnscreen *onscreen, int x, int y, int width, int height);
+void cogl_symbian_onscreen_set_composited (CoglOnscreen *onscreen, CoglBool composited);
 
 ClutterBackend *clutter_backend_symbian_new (void);
 
@@ -71,7 +72,8 @@ typedef struct {
   gint width, height;            /* the window size when not full-screen */
   gchar *title;
   gint reg_id;                   /* the window registry's id (C4: phewinreg), 0 = not registered, < 0 = no registry */
-  gint reg_watchers;             /* frame processes importing the content (the registry tells), 0 = publish nothing */
+  gint reg_watchers;             /* frame processes subscribed to this window (the registry tells), 0 = publish nothing */
+  gboolean reg_composited;       /* a frame process composites it: off the window server's screen, no present (7.48) */
   guchar *reg_pixels;
   gulong reg_paint_handler;
   /* the GPU path (hildon-port.md 7.47): an exported texture the frame is copied into, its token published with the content */
@@ -230,7 +232,30 @@ stage_target_size (ClutterStageSymbian *self, gint *w, gint *h)
 #define REG_FULLSCREEN 1   /* EPheWinFullscreen */
 #define REG_HIDDEN 8       /* EPheWinHidden */
 
-static gint reg_watchers_now;   /* the registry's last watcher count */
+/* this window's subscriptions now (hildon-port.md 7.48: per window, not a global count); TRUE = a frame process just came */
+static gboolean
+stage_reg_subs (ClutterStageSymbian *self)
+{
+  ClutterStageCogl *cogl = CLUTTER_STAGE_COGL (self);
+  gint subs = 0, comp = 0;
+  gboolean started;
+
+  if (self->reg_id <= 0 || phe_clws_reg_subs (self->reg_id, &subs, &comp) < 0)
+    subs = comp = 0;
+  started = self->reg_watchers <= 0 && subs > 0;
+  self->reg_watchers = subs;
+  if ((comp > 0) != self->reg_composited)
+    {
+      self->reg_composited = comp > 0;
+      if (cogl->onscreen)
+        cogl_symbian_onscreen_set_composited (cogl->onscreen, self->reg_composited);
+      LOG ("[clutter-symbian] registry: window %d %s", self->reg_id,
+           self->reg_composited ? "is composited by a frame process (off screen, no present)" : "presents itself again");
+      if (!self->reg_composited && cogl->wrapper)
+        clutter_actor_queue_redraw (CLUTTER_ACTOR (cogl->wrapper));
+    }
+  return started;
+}
 
 static void
 stage_reg_meta (ClutterStageSymbian *self)
@@ -369,7 +394,7 @@ stage_reg_show (ClutterStageSymbian *self)
     {
       self->reg_id = phe_clws_reg_window (self->title, 0, 0, 0, cogl_framebuffer_get_width (COGL_FRAMEBUFFER (cogl->onscreen)),
                                           cogl_framebuffer_get_height (COGL_FRAMEBUFFER (cogl->onscreen)), self->fullscreen ? REG_FULLSCREEN : 0);
-      self->reg_watchers = reg_watchers_now;
+      stage_reg_subs (self);
       LOG ("[clutter-symbian] registry: stage '%s' is window %d", self->title ? self->title : "", self->reg_id);
       if (self->reg_id > 0 && cogl->wrapper)
         self->reg_paint_handler = g_signal_connect (cogl->wrapper, "after-paint", G_CALLBACK (stage_reg_after_paint), self);
@@ -807,14 +832,10 @@ translate (ClutterBackend *backend, const PheClwsEvent *e)
     case PHE_CLWS_WATCHERS:
       {
         GSList *l;
-        LOG ("[clutter-symbian] registry: %d watching", e->x);
-        reg_watchers_now = e->x;
         for (l = all_stages; l != NULL; l = l->next)
           {
             ClutterStageSymbian *self = l->data;
-            gboolean started = self->reg_watchers <= 0 && e->x > 0;
-            self->reg_watchers = e->x;
-            if (started && self->reg_id > 0)   /* a frame process came: a full frame for it */
+            if (stage_reg_subs (self) && self->reg_id > 0)   /* a frame process came: a full frame for it */
               clutter_actor_queue_redraw (CLUTTER_ACTOR (CLUTTER_STAGE_COGL (self)->wrapper));
           }
       }

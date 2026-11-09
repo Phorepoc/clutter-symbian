@@ -26,17 +26,22 @@ GLDEF_C TInt E32Main()
 
 // ======================================================================== the frame side of the window registry test (hildon-port.md C4)
 // "cluttertest frame": a second process plays the frame process: it waits for registry changes (blocking, on its own
-// thread: the registry session lives there) and imports the first other process's window: the bitmap duplicated by its
-// FBSERV handle, its pixels copied out for a Clutter texture.
+// thread: the registry session lives there) and composites every other process's window (hildon-port.md 7.48): by GPU share
+// token, or else the bitmap duplicated by its FBSERV handle and its pixels copied out.
 #include <fbs.h>
 #include "phewinreg.h"
 
-// aToken: the window's GPU share token (hildon-port.md 7.47; then *aPixels = NULL and the size is the window's), 0 = bitmap content
-extern "C" int phe_frame_next(unsigned* aSeen, int* aId, int* aW, int* aH, unsigned char** aPixels, int* aToken, char* aTitle, int aTitleLen)
+// one window as the compositor sees it (cluttertest_main.c PheFrameWin): geometry, GPU share token, or else a copy of the bitmap
+struct PheFrameWin { int iId, iX, iY, iW, iH, iToken; unsigned char* iPx; int iPw, iPh; char iTitle[64]; };
+
+// waits for the next registry change after *aSeen, then: every other process's visible window, in registration order (at most
+// aMax), each subscribed as composited by this process (EPheWinComposite: its owner keeps it off the window server's screen).
+// Returns the count, or an error
+extern "C" int phe_frame_list(unsigned* aSeen, PheFrameWin* aOut, int aMax)
 	{
-	*aToken = 0;
 	static RPheWinReg reg;
 	static TBool up;
+	static RArray<TInt> subscribed;
 	if (!up)
 		{
 		TInt r = RFbsSession::GetSession() ? KErrNone : RFbsSession::Connect();
@@ -46,56 +51,64 @@ extern "C" int phe_frame_next(unsigned* aSeen, int* aId, int* aW, int* aH, unsig
 			return r;
 		up = ETrue;
 		}
-	TRequestStatus st;
-	reg.Notify(*aSeen, st);
-	User::WaitForRequest(st);
-	if (st.Int() < 0)
-		return st.Int();
-	*aSeen = (TUint)st.Int();
-	TPheWinInfo list[8];
+	// the first call lists at once: the windows that registered before this process came (nothing else would change: their content
+	// waits for a subscriber). The registry's serial starts at 1, so from 1 on the wait ends at the next change
+	if (*aSeen == 0)
+		*aSeen = 1;
+	else
+		{
+		TRequestStatus st;
+		reg.Notify(*aSeen, st);
+		User::WaitForRequest(st);
+		if (st.Int() < 0)
+			return st.Int();
+		*aSeen = (TUint)st.Int();
+		}
+	TPheWinInfo list[16];
 	TPtr8 p((TUint8*)list, 0, sizeof(list));
 	const TInt n = reg.List(p);
+	if (n < 0)
+		return n;
 	const TUint me = (TUint)RProcess().Id().Id();
-	for (TInt i = 0; i < n && i < 8; ++i)
+	TInt out = 0;
+	for (TInt i = 0; i < n && i < 16 && out < aMax; ++i)
 		{
-		if (list[i].iOwner == me || (list[i].iBitmap == 0 && list[i].iGpuToken == 0) || (list[i].iState & EPheWinHidden))
+		const TPheWinInfo& w = list[i];
+		if (w.iOwner == me || (w.iState & EPheWinHidden))
 			continue;
-		if (list[i].iGpuToken)
+		if (subscribed.Find(w.iId) < 0 && reg.Subscribe(w.iId, EPheWinComposite) == KErrNone)
+			subscribed.Append(w.iId);		// (a window that goes leaves a stale id: ids are not reused)
+		PheFrameWin& f = aOut[out];
+		Mem::FillZ(&f, sizeof(f));
+		f.iId = w.iId; f.iX = w.iGeometry.iTl.iX; f.iY = w.iGeometry.iTl.iY; f.iW = w.iGeometry.Width(); f.iH = w.iGeometry.Height();
+		f.iToken = w.iGpuToken;
+		if (!f.iToken && w.iBitmap)
 			{
-			*aId = list[i].iId; *aW = list[i].iGeometry.Width(); *aH = list[i].iGeometry.Height(); *aPixels = NULL;
-			*aToken = list[i].iGpuToken;
-			TBuf8<64> t;
-			t.Copy(list[i].iTitle);
-			const TInt l = Min(t.Length(), aTitleLen - 1);
-			Mem::Copy(aTitle, t.Ptr(), l);
-			aTitle[l] = 0;
-			return 1;
+			CFbsBitmap* b = new CFbsBitmap;
+			if (b && b->Duplicate(w.iBitmap) == KErrNone)
+				{
+				const TSize s = b->SizeInPixels();
+				const TInt stride = CFbsBitmap::ScanLineLength(s.iWidth, b->DisplayMode());
+				f.iPx = (unsigned char*)User::Alloc(s.iWidth * s.iHeight * 4);
+				if (f.iPx)
+					{
+					b->BeginDataAccess();
+					for (TInt y = 0; y < s.iHeight; ++y)
+						Mem::Copy(f.iPx + y * s.iWidth * 4, (const TUint8*)b->DataAddress() + y * stride, s.iWidth * 4);
+					b->EndDataAccess(ETrue);
+					f.iPw = s.iWidth; f.iPh = s.iHeight;
+					}
+				}
+			delete b;		// (replaced since the list: the next change brings the new one)
 			}
-		CFbsBitmap* b = new CFbsBitmap;
-		if (!b || b->Duplicate(list[i].iBitmap) != KErrNone)
-			{ delete b; continue; }		// (replaced since the list: the next change brings the new one)
-		const TSize s = b->SizeInPixels();
-		const TInt stride = CFbsBitmap::ScanLineLength(s.iWidth, b->DisplayMode());
-		unsigned char* px = (unsigned char*)User::Alloc(s.iWidth * s.iHeight * 4);
-		if (px)
-			{
-			b->BeginDataAccess();
-			for (TInt y = 0; y < s.iHeight; ++y)
-				Mem::Copy(px + y * s.iWidth * 4, (const TUint8*)b->DataAddress() + y * stride, s.iWidth * 4);
-			b->EndDataAccess(ETrue);
-			}
-		delete b;
-		if (!px)
-			return KErrNoMemory;
-		*aId = list[i].iId; *aW = s.iWidth; *aH = s.iHeight; *aPixels = px;
 		TBuf8<64> t;
-		t.Copy(list[i].iTitle);
-		const TInt l = Min(t.Length(), aTitleLen - 1);
-		Mem::Copy(aTitle, t.Ptr(), l);
-		aTitle[l] = 0;
-		return 1;
+		t.Copy(w.iTitle);
+		const TInt l = Min(t.Length(), (TInt)sizeof(f.iTitle) - 1);
+		Mem::Copy(f.iTitle, t.Ptr(), l);
+		f.iTitle[l] = 0;
+		++out;
 		}
-	return 0;
+	return out;
 	}
 
 extern "C" void phe_frame_free(unsigned char* aPixels) { User::Free(aPixels); }

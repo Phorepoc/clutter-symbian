@@ -36,6 +36,7 @@
 const CoglWinsysVtable *_cogl_winsys_egl_symbian_get_vtable (void);
 void *cogl_symbian_onscreen_get_window (CoglOnscreen *onscreen);
 void cogl_symbian_onscreen_resize (CoglOnscreen *onscreen, int x, int y, int width, int height);
+void cogl_symbian_onscreen_set_composited (CoglOnscreen *onscreen, CoglBool composited);
 
 static const CoglWinsysEGLVtable _cogl_winsys_egl_vtable;
 
@@ -47,6 +48,9 @@ typedef struct _CoglDisplaySymbian
 typedef struct _CoglOnscreenSymbian
 {
   void *window;                /* the RWindow of this onscreen */
+  CoglBool visible;            /* as the application asked */
+  CoglBool composited;         /* a frame process composites this window from its exported texture (hildon-port.md 7.48): the window stays
+                                  off the window server's screen and a swap presents nothing (the frame was published after the paint) */
 } CoglOnscreenSymbian;
 
 static void
@@ -253,7 +257,35 @@ _cogl_winsys_onscreen_set_visibility (CoglOnscreen *onscreen,
   CoglOnscreenEGL *egl_onscreen = onscreen->winsys;
   CoglOnscreenSymbian *sym_onscreen = egl_onscreen->platform;
 
-  phe_clws_window_set_visible (sym_onscreen->window, visibility);
+  sym_onscreen->visible = visibility;
+  phe_clws_window_set_visible (sym_onscreen->window, visibility && !sym_onscreen->composited);
+}
+
+void
+cogl_symbian_onscreen_set_composited (CoglOnscreen *onscreen, CoglBool composited)
+{
+  CoglOnscreenEGL *egl_onscreen = onscreen->winsys;
+  CoglOnscreenSymbian *sym_onscreen = egl_onscreen ? egl_onscreen->platform : NULL;
+
+  if (sym_onscreen == NULL || sym_onscreen->composited == composited)
+    return;
+  sym_onscreen->composited = composited;
+  phe_clws_window_set_visible (sym_onscreen->window, sym_onscreen->visible && !composited);
+}
+
+/* composited: no present. The paint is in the back buffer, and the frame was copied out after the paint; without a swap the next
+   frame draws over the same buffer (Clutter redraws whole frames here: no buffer age, no swap region) */
+static void (*parent_swap_buffers_with_damage) (CoglOnscreen *onscreen, const int *rectangles, int n_rectangles);
+
+static void
+_cogl_winsys_onscreen_swap_buffers_with_damage (CoglOnscreen *onscreen, const int *rectangles, int n_rectangles)
+{
+  CoglOnscreenEGL *egl_onscreen = onscreen->winsys;
+  CoglOnscreenSymbian *sym_onscreen = egl_onscreen->platform;
+
+  if (sym_onscreen->composited)
+    return;
+  parent_swap_buffers_with_damage (onscreen, rectangles, n_rectangles);
 }
 
 static void
@@ -320,6 +352,8 @@ _cogl_winsys_egl_symbian_get_vtable (void)
       vtable.renderer_disconnect = _cogl_winsys_renderer_disconnect;
 
       vtable.onscreen_set_visibility = _cogl_winsys_onscreen_set_visibility;
+      parent_swap_buffers_with_damage = vtable.onscreen_swap_buffers_with_damage;
+      vtable.onscreen_swap_buffers_with_damage = _cogl_winsys_onscreen_swap_buffers_with_damage;
       vtable.onscreen_set_resizable = _cogl_winsys_onscreen_set_resizable;
 
       vtable_inited = TRUE;

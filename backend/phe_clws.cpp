@@ -465,6 +465,26 @@ extern "C" int phe_clws_reg_content_gpu(int aId, int aToken, int aW, int aH, int
 	return gReg.Content(aId, 0, TRect(TPoint(aDx, aDy), TSize(aDw, aDh)), aToken);
 	}
 
+extern "C" int phe_clws_reg_subs(int aId, int* aSubscribers, int* aComposited)
+	{
+	*aSubscribers = *aComposited = 0;
+	if (!gRegUp)
+		return KErrNotReady;
+	TPheWinInfo list[16];
+	TPtr8 p((TUint8*)list, 0, sizeof(list));
+	const TInt n = gReg.List(p);
+	if (n < 0)
+		return n;
+	for (TInt i = 0; i < n && i < 16; ++i)
+		if (list[i].iId == aId)
+			{
+			*aSubscribers = list[i].iSubscribers;
+			*aComposited = list[i].iComposited;
+			return KErrNone;
+			}
+	return KErrNotFound;
+	}
+
 extern "C" void phe_clws_reg_remove(int aId)
 	{
 	if (!gRegUp)

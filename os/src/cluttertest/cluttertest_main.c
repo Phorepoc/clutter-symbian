@@ -202,116 +202,178 @@ on_activate (ClutterActor *stage, gpointer data)
 extern void phe_clws_screen_size (int *w, int *h);
 
 /* ======================================================================== the frame side of the registry test (C4, "cluttertest frame")
- * a helper thread blocks on the registry (phe_frame_next, cluttertest.cpp) and hands each imported window to the main loop,
- * which shows it as a texture (ClutterImage) on this process's own small stage */
-extern int phe_frame_next (unsigned *seen, int *id, int *w, int *h, unsigned char **pixels, int *token, char *title, int title_len);
-extern void phe_frame_free (unsigned char *pixels);
-extern int phe_frame_spawn (void);
-extern int phe_is_frame (void);
-extern int phe_cmd_has (const char *word);
-
-typedef struct { int id, w, h, token; unsigned char *px; char title[64]; } FrameImport;
-static ClutterActor *frame_view;
-static int frame_imports;
-
-/* the GPU path (hildon-port.md 7.47): the window's exported texture, imported once per token (EGL_SYMBIAN_SVGA_SHARE_PH) and shown 1:1
-   (the frame's top-left corner) on a texture actor, flipped (the exporter copies GL rows: its row 0 is the frame's bottom). Each content
-   update is only a redraw: the texture is the window's, on the GPU */
+ * a small compositor (hildon-port.md 7.48): a helper thread blocks on the registry (phe_frame_list, cluttertest.cpp), subscribes to
+ * every other process's window as its compositor, and hands each window list to the main loop. The main loop draws the windows on
+ * this process's own FULL-SCREEN stage, at their geometry, in registration order: a window with a GPU share token is its exported
+ * texture (imported once per token, flipped: the exporter copies GL rows), else its published bitmap. The composited windows are off
+ * the window server's screen (their owners hide them and skip the present), so this stage alone is on the screen and keeps scan-out. */
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <cogl/cogl-egl.h>
 #define EGL_SYMBIAN_SVGA_SHARE_PH 0x3FF2
 CoglTexture2D *_cogl_egl_texture_2d_new_from_image (CoglContext *ctx, int width, int height, CoglPixelFormat format,
                                                     EGLImageKHR image, CoglError **error);
-static ClutterActor *frame_gpu_view;
-static int frame_gpu_token, frame_gpu_shows, frame_gpu_checks;
-static EGLImageKHR frame_gpu_image;
+
+typedef struct { int id, x, y, w, h, token; unsigned char *px; int pw, ph; char title[64]; } PheFrameWin;
+#define FRAME_MAX 8
+extern int phe_frame_list (unsigned *seen, PheFrameWin *out, int max);
+extern void phe_frame_free (unsigned char *pixels);
+extern int phe_frame_spawn (void);
+extern int phe_is_frame (void);
+extern int phe_cmd_has (const char *word);
+
+typedef struct { int n; PheFrameWin w[FRAME_MAX]; } FrameList;
+typedef struct { int id, token; ClutterActor *gpu, *bmp; EGLImageKHR image; gboolean seen; } FrameWin;
+static ClutterActor *frame_stage;
+static GList *frame_wins;          /* FrameWin, registration order */
+static int frame_checks, frame_lists, frame_frames;
+static gint64 frame_t0;
+
+static FrameWin *
+frame_win (int id)
+{
+  GList *l;
+  FrameWin *f;
+  for (l = frame_wins; l; l = l->next)
+    if (((FrameWin *) l->data)->id == id)
+      return l->data;
+  f = g_new0 (FrameWin, 1);
+  f->id = id;
+  f->gpu = clutter_texture_new ();
+  f->bmp = clutter_actor_new ();
+  clutter_actor_set_content (f->bmp, clutter_image_new ());
+  clutter_actor_hide (f->gpu);
+  clutter_actor_hide (f->bmp);
+  clutter_actor_add_child (frame_stage, f->gpu);
+  clutter_actor_add_child (frame_stage, f->bmp);
+  frame_wins = g_list_append (frame_wins, f);
+  return f;
+}
 
 static void
-frame_gpu_check (ClutterActor *stage, gpointer data)
+frame_win_free (FrameWin *f)
 {
-  /* the pixel check (as the bitmap path's import log): the frame stage's (10,10) after a paint = the window's (10,10) */
-  guchar px[4];
-  (void) data; (void) stage;
-  if (frame_gpu_checks >= 3 || !frame_gpu_token)
-    return;
-  frame_gpu_checks++;
-  cogl_framebuffer_read_pixels (cogl_get_draw_framebuffer (), 10, 10, 1, 1, COGL_PIXEL_FORMAT_BGRA_8888_PRE, px);
-  LOG ("[cluttertest-frame] GPU import check #%d: frame stage pixel(10,10) = %02x%02x%02x%02x", frame_gpu_checks, px[3], px[2], px[1], px[0]);
+  CoglContext *ctx = clutter_backend_get_cogl_context (clutter_get_default_backend ());
+  clutter_actor_destroy (f->gpu);
+  clutter_actor_destroy (f->bmp);
+  if (f->image)
+    ((PFNEGLDESTROYIMAGEKHRPROC) eglGetProcAddress ("eglDestroyImageKHR")) (cogl_egl_context_get_egl_display (ctx), f->image);
+  g_free (f);
 }
 
 static gboolean
-frame_show_gpu (FrameImport *f)
+frame_import_gpu (FrameWin *f, const PheFrameWin *w)
 {
-  if (f->token != frame_gpu_token)
+  CoglContext *ctx = clutter_backend_get_cogl_context (clutter_get_default_backend ());
+  EGLDisplay dpy = cogl_egl_context_get_egl_display (ctx);
+  PFNEGLCREATEIMAGEKHRPROC create = (PFNEGLCREATEIMAGEKHRPROC) eglGetProcAddress ("eglCreateImageKHR");
+  PFNEGLDESTROYIMAGEKHRPROC destroy = (PFNEGLDESTROYIMAGEKHRPROC) eglGetProcAddress ("eglDestroyImageKHR");
+  EGLint attrs[] = { EGL_WIDTH, w->w, EGL_HEIGHT, w->h, EGL_NONE };
+  EGLImageKHR img = create (dpy, EGL_NO_CONTEXT, EGL_SYMBIAN_SVGA_SHARE_PH, (EGLClientBuffer) (intptr_t) w->token, attrs);
+  CoglError *err = NULL;
+  CoglTexture2D *tex = img != EGL_NO_IMAGE_KHR ?
+    _cogl_egl_texture_2d_new_from_image (ctx, w->w, w->h, COGL_PIXEL_FORMAT_BGRA_8888_PRE, img, &err) : NULL;
+
+  if (!tex)
     {
-      CoglContext *ctx = clutter_backend_get_cogl_context (clutter_get_default_backend ());
-      EGLDisplay dpy = cogl_egl_context_get_egl_display (ctx);
-      PFNEGLCREATEIMAGEKHRPROC create = (PFNEGLCREATEIMAGEKHRPROC) eglGetProcAddress ("eglCreateImageKHR");
-      PFNEGLDESTROYIMAGEKHRPROC destroy = (PFNEGLDESTROYIMAGEKHRPROC) eglGetProcAddress ("eglDestroyImageKHR");
-      EGLint attrs[] = { EGL_WIDTH, f->w, EGL_HEIGHT, f->h, EGL_NONE };
-      EGLImageKHR img = create (dpy, EGL_NO_CONTEXT, EGL_SYMBIAN_SVGA_SHARE_PH, (EGLClientBuffer) (intptr_t) f->token, attrs);
-      CoglError *err = NULL;
-      CoglTexture2D *tex = img != EGL_NO_IMAGE_KHR ?
-        _cogl_egl_texture_2d_new_from_image (ctx, f->w, f->h, COGL_PIXEL_FORMAT_BGRA_8888_PRE, img, &err) : NULL;
-      if (!tex)
-        {
-          LOG ("[cluttertest-frame] GPU import of token %d failed (EGL %x, %s)", f->token, eglGetError (), err ? err->message : "-");
-          if (err) cogl_error_free (err);
-          if (img != EGL_NO_IMAGE_KHR) destroy (dpy, img);
-          return FALSE;
-        }
-      clutter_texture_set_cogl_texture (CLUTTER_TEXTURE (frame_gpu_view), COGL_TEXTURE (tex));
-      cogl_object_unref (tex);
-      if (frame_gpu_image)
-        destroy (dpy, frame_gpu_image);
-      frame_gpu_image = img;
-      clutter_actor_set_size (frame_gpu_view, f->w, f->h);
-      clutter_actor_set_pivot_point (frame_gpu_view, 0.5, 0.5);
-      clutter_actor_set_scale (frame_gpu_view, 1.0, -1.0);
-      clutter_actor_hide (frame_view);
-      clutter_actor_show (frame_gpu_view);
-      frame_gpu_token = f->token;
-      frame_gpu_checks = 0;
-      LOG ("[cluttertest-frame] GPU import: window %d '%s' %dx%d, token %d, as a texture (no copy)", f->id, f->title, f->w, f->h, f->token);
+      LOG ("[cluttertest-frame] GPU import of token %d failed (EGL %x, %s)", w->token, eglGetError (), err ? err->message : "-");
+      if (err) cogl_error_free (err);
+      if (img != EGL_NO_IMAGE_KHR) destroy (dpy, img);
+      return FALSE;
     }
-  frame_gpu_shows++;
-  clutter_actor_queue_redraw (frame_gpu_view);
+  clutter_texture_set_cogl_texture (CLUTTER_TEXTURE (f->gpu), COGL_TEXTURE (tex));
+  cogl_object_unref (tex);
+  if (f->image)
+    destroy (dpy, f->image);
+  f->image = img;
+  f->token = w->token;
+  LOG ("[cluttertest-frame] composite: window %d '%s' %dx%d at %d,%d, token %d (GPU texture, no copy)", w->id, w->title, w->w, w->h,
+       w->x, w->y, w->token);
   return TRUE;
 }
 
 static gboolean
 frame_show (gpointer data)
 {
-  FrameImport *f = data;
-  ClutterContent *img = clutter_actor_get_content (frame_view);
-  GError *err = NULL;
+  FrameList *list = data;
+  GList *l, *next;
+  int i;
 
-  if (f->token)
+  for (l = frame_wins; l; l = l->next)
+    ((FrameWin *) l->data)->seen = FALSE;
+  for (i = 0; i < list->n; i++)
     {
-      frame_show_gpu (f);
-      g_free (f);
-      return G_SOURCE_REMOVE;
+      PheFrameWin *w = &list->w[i];
+      FrameWin *f = frame_win (w->id);
+      f->seen = TRUE;
+      if (w->token && (w->token == f->token || frame_import_gpu (f, w)))
+        {
+          clutter_actor_set_position (f->gpu, w->x, w->y);
+          clutter_actor_set_size (f->gpu, w->w, w->h);
+          clutter_actor_set_pivot_point (f->gpu, 0.5, 0.5);
+          clutter_actor_set_scale (f->gpu, 1.0, -1.0);
+          clutter_actor_hide (f->bmp);
+          clutter_actor_show (f->gpu);
+          clutter_actor_queue_redraw (f->gpu);       /* the texture is the window's: new content is a redraw */
+        }
+      else if (w->px)
+        {
+          GError *err = NULL;
+          if (clutter_image_set_data (CLUTTER_IMAGE (clutter_actor_get_content (f->bmp)), w->px, COGL_PIXEL_FORMAT_BGRA_8888_PRE,
+                                      w->pw, w->ph, w->pw * 4, &err))
+            {
+              clutter_actor_set_position (f->bmp, w->x, w->y);
+              clutter_actor_set_size (f->bmp, w->pw, w->ph);
+              clutter_actor_hide (f->gpu);
+              clutter_actor_show (f->bmp);
+            }
+          else
+            LOG ("[cluttertest-frame] bitmap import failed: %s", err ? err->message : "?");
+          g_clear_error (&err);
+        }
+      if (w->px)
+        phe_frame_free (w->px);
     }
-  if (frame_gpu_token)
+  for (l = frame_wins; l; l = next)
     {
-      clutter_actor_hide (frame_gpu_view);
-      clutter_actor_show (frame_view);
-      frame_gpu_token = 0;
+      next = l->next;
+      if (!((FrameWin *) l->data)->seen)
+        {
+          frame_win_free (l->data);
+          frame_wins = g_list_delete_link (frame_wins, l);
+        }
     }
-
-  if (clutter_image_set_data (CLUTTER_IMAGE (img), f->px, COGL_PIXEL_FORMAT_BGRA_8888_PRE, f->w, f->h, f->w * 4, &err))
-    {
-      if (frame_imports++ < 3 || frame_imports % 100 == 0)
-        LOG ("[cluttertest-frame] import #%d: window %d '%s' %dx%d as a texture, pixel(10,10) = %08x", frame_imports, f->id, f->title, f->w, f->h,
-             f->w > 10 && f->h > 10 ? ((unsigned *) f->px)[10 * f->w + 10] : 0);
-    }
-  else
-    LOG ("[cluttertest-frame] import failed: %s", err ? err->message : "?");
-  g_clear_error (&err);
-  phe_frame_free (f->px);
-  g_free (f);
+  if (frame_lists++ < 2)
+    LOG ("[cluttertest-frame] compositing %d window(s)", list->n);
+  g_free (list);
   return G_SOURCE_REMOVE;
+}
+
+/* after each paint of the compositor's stage: its frame rate, and the pixel check (its (10,10) and (1010,10), three times once a GPU
+   window is composited) */
+static void
+frame_after_paint (ClutterActor *stage, gpointer data)
+{
+  guchar a[4], b[4];
+  gint64 now = g_get_monotonic_time ();
+  (void) data; (void) stage;
+  if (!frame_t0)
+    frame_t0 = now;
+  frame_frames++;
+  if (now - frame_t0 >= 2000000)
+    {
+      LOG ("[cluttertest-frame] %d composited frames in %d ms = %.1f fps", frame_frames, (int) ((now - frame_t0) / 1000),
+           frame_frames * 1000000.0 / (now - frame_t0));
+      frame_frames = 0;
+      frame_t0 = now;
+    }
+  if (frame_checks >= 3 || !frame_wins || !((FrameWin *) frame_wins->data)->token)
+    return;
+  frame_checks++;
+  cogl_framebuffer_read_pixels (cogl_get_draw_framebuffer (), 10, 10, 1, 1, COGL_PIXEL_FORMAT_BGRA_8888_PRE, a);
+  cogl_framebuffer_read_pixels (cogl_get_draw_framebuffer (), 1010, 10, 1, 1, COGL_PIXEL_FORMAT_BGRA_8888_PRE, b);
+  LOG ("[cluttertest-frame] composite check #%d: pixel(10,10) = %02x%02x%02x%02x, pixel(1010,10) = %02x%02x%02x%02x", frame_checks,
+       a[3], a[2], a[1], a[0], b[3], b[2], b[1], b[0]);
 }
 
 static gpointer
@@ -321,35 +383,26 @@ frame_thread (gpointer data)
   (void) data;
   for (;;)
     {
-      FrameImport *f = g_new0 (FrameImport, 1);
-      int r = phe_frame_next (&seen, &f->id, &f->w, &f->h, &f->px, &f->token, f->title, sizeof f->title);
-      if (r < 0) { LOG ("[cluttertest-frame] registry: %d", r); g_free (f); return NULL; }
-      if (r == 0) { g_free (f); continue; }
-      g_idle_add (frame_show, f);
+      FrameList *list = g_new0 (FrameList, 1);
+      list->n = phe_frame_list (&seen, list->w, FRAME_MAX);
+      if (list->n < 0) { LOG ("[cluttertest-frame] registry: %d", list->n); g_free (list); return NULL; }
+      g_idle_add (frame_show, list);
     }
 }
 
 static int
 frame_main (void)
 {
-  ClutterActor *stage;
-  ClutterColor bg = { 30, 30, 30, 255 };
+  ClutterColor bg = { 0, 0, 0, 255 };
 
   if (clutter_init (NULL, NULL) != CLUTTER_INIT_SUCCESS) return 1;
-  stage = clutter_stage_new ();
-  clutter_stage_set_title (CLUTTER_STAGE (stage), "frame");
-  clutter_actor_set_background_color (stage, &bg);
-  clutter_actor_set_size (stage, 120, 200);
-  frame_view = clutter_actor_new ();
-  clutter_actor_set_content (frame_view, clutter_image_new ());
-  clutter_actor_set_size (frame_view, 120, 200);
-  clutter_actor_add_child (stage, frame_view);
-  frame_gpu_view = clutter_texture_new ();
-  clutter_actor_hide (frame_gpu_view);
-  clutter_actor_add_child (stage, frame_gpu_view);
-  g_signal_connect (stage, "after-paint", G_CALLBACK (frame_gpu_check), NULL);
-  clutter_actor_show (stage);
-  LOG ("[cluttertest-frame] up: waiting for windows in the registry");
+  frame_stage = clutter_stage_new ();
+  clutter_stage_set_title (CLUTTER_STAGE (frame_stage), "frame");
+  clutter_actor_set_background_color (frame_stage, &bg);
+  clutter_stage_set_fullscreen (CLUTTER_STAGE (frame_stage), TRUE);
+  g_signal_connect (frame_stage, "after-paint", G_CALLBACK (frame_after_paint), NULL);
+  clutter_actor_show (frame_stage);
+  LOG ("[cluttertest-frame] up: compositing the registry's windows full screen");
   g_thread_new ("frame-registry", frame_thread, NULL);
   clutter_main ();
   return 0;
