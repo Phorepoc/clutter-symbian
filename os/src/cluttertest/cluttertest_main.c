@@ -11,7 +11,7 @@ extern void phe_log (const char *msg);
 
 static gint frames;
 static gint64 t0;
-static ClutterActor *spin, *blur;
+static ClutterActor *spin, *blur, *stage2;
 
 static void
 after_paint (ClutterActor *stage, gpointer data)
@@ -178,6 +178,7 @@ on_key (ClutterActor *stage, ClutterEvent *ev, gpointer data)
        clutter_event_get_key_code (ev));
   if (clutter_event_type (ev) != CLUTTER_KEY_PRESS) return CLUTTER_EVENT_PROPAGATE;
   clutter_actor_get_position (spin, &x, &y);
+  if (k == CLUTTER_KEY_d && stage2) { clutter_actor_destroy (stage2); stage2 = NULL; LOG ("[cluttertest] second stage destroyed (key d): one full-screen stage"); return CLUTTER_EVENT_STOP; }
   if (k == CLUTTER_KEY_Left) x -= 20; else if (k == CLUTTER_KEY_Right) x += 20; else if (k == CLUTTER_KEY_Up) y -= 20; else if (k == CLUTTER_KEY_Down) y += 20;
   clutter_actor_set_position (spin, x, y);
   return CLUTTER_EVENT_STOP;
@@ -239,7 +240,7 @@ phe_clutter_main (void)
   clutter_actor_show (stage);
   {
     /* the two-stage test: a second, smaller stage (its own window and EGL surface through Cogl's symbian platform), shown over the first */
-    ClutterActor *s2 = clutter_stage_new (), *r = clutter_actor_new (); ClutterColor c2 = { 200, 60, 40, 255 }, cr = { 240, 230, 80, 255 };
+    ClutterActor *s2 = stage2 = clutter_stage_new (), *r = clutter_actor_new (); ClutterColor c2 = { 200, 60, 40, 255 }, cr = { 240, 230, 80, 255 };
     clutter_actor_set_size (s2, 160, 120);
     clutter_actor_set_background_color (s2, &c2);
     clutter_actor_set_size (r, 60, 40); clutter_actor_set_position (r, 50, 40); clutter_actor_set_background_color (r, &cr);
