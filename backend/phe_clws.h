@@ -60,6 +60,7 @@ int phe_clws_reg_subs (int id, int *subscribers, int *composited);
 int phe_clws_frame_watch (void);
 int phe_clws_reg_list (void *buf, int bytes);
 int phe_clws_reg_subscribe (int id, int mode);
+int phe_clws_reg_pointer (int id, int type, int x, int y);
 
 #ifdef __cplusplus
 }

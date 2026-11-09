@@ -232,6 +232,26 @@ static GList *frame_wins;          /* FrameWin, registration order */
 static int frame_checks, frame_lists, frame_frames;
 static gint64 frame_t0;
 
+extern int phe_clws_reg_pointer (int id, int type, int x, int y);
+
+/* a click on a bitmap window goes to its owner in the window's content pixels (TRawEvent EButton1Down 10 / EButton1Up 11 /
+ * EPointerMove 1): a classic app's screen shown as a window takes the click as its own digitiser's (hildon-port.md 7.51 (d)) */
+static gboolean
+frame_button (ClutterActor *actor, ClutterEvent *event, gpointer data)
+{
+  FrameWin *f = data;
+  gfloat x, y, lx = 0, ly = 0;
+  int type, r;
+  ClutterEventType t = clutter_event_type (event);
+  type = t == CLUTTER_BUTTON_PRESS ? 10 : t == CLUTTER_BUTTON_RELEASE ? 11 : 1;
+  clutter_event_get_coords (event, &x, &y);
+  clutter_actor_transform_stage_point (actor, x, y, &lx, &ly);
+  r = phe_clws_reg_pointer (f->id, type, (int) lx, (int) ly);
+  if (type != 1)
+    LOG ("[cluttertest-frame] window %d: pointer %d at %d,%d -> %d", f->id, type, (int) lx, (int) ly, r);
+  return CLUTTER_EVENT_STOP;
+}
+
 static FrameWin *
 frame_win (int id)
 {
@@ -245,6 +265,9 @@ frame_win (int id)
   f->gpu = clutter_texture_new ();
   f->bmp = clutter_actor_new ();
   clutter_actor_set_content (f->bmp, clutter_image_new ());
+  clutter_actor_set_reactive (f->bmp, TRUE);
+  g_signal_connect (f->bmp, "button-press-event", G_CALLBACK (frame_button), f);
+  g_signal_connect (f->bmp, "button-release-event", G_CALLBACK (frame_button), f);
   clutter_actor_hide (f->gpu);
   clutter_actor_hide (f->bmp);
   clutter_actor_add_child (frame_stage, f->gpu);
@@ -327,6 +350,15 @@ frame_show (gpointer data)
             {
               clutter_actor_set_position (f->bmp, w->x, w->y);
               clutter_actor_set_size (f->bmp, w->pw, w->ph);
+              if (w->pw > 0 && w->ph > 0)
+                {
+                  /* (once per window) the import proof: the content's size and its centre pixel, BGRA */
+                  const unsigned char *c = w->px + ((w->ph / 2) * w->pw + w->pw / 2) * 4;
+                  static int logged[16];
+                  if (w->id > 0 && w->id < 16 && !logged[w->id]++)
+                    LOG ("[cluttertest-frame] window %d \"%s\" bitmap imported %dx%d, centre px %02x%02x%02x", w->id, w->title,
+                         w->pw, w->ph, c[2], c[1], c[0]);
+                }
               clutter_actor_hide (f->gpu);
               clutter_actor_show (f->bmp);
             }

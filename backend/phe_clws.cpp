@@ -541,6 +541,12 @@ extern "C" int phe_clws_reg_subscribe(int aId, int aMode)
 	return gRegUp ? gReg.Subscribe(aId, aMode) : KErrNotReady;
 	}
 
+// a pointer event for a composited window (its content pixels): the registry queues it for the owner (phewinreg Pointer)
+extern "C" int phe_clws_reg_pointer(int aId, int aType, int aX, int aY)
+	{
+	return gRegUp ? gReg.Pointer(aId, aType, TPoint(aX, aY)) : KErrNotReady;
+	}
+
 extern "C" int phe_clws_reg_subs(int aId, int* aSubscribers, int* aComposited)
 	{
 	*aSubscribers = *aComposited = 0;
