@@ -249,6 +249,22 @@ phe_clutter_main (void)
     clutter_actor_show (s2);
     LOG ("[cluttertest] second stage shown (160x120)");
   }
+  {
+    /* C3: text through cogl-pango (ClutterText: a Pango layout, glyphs cached in Cogl textures) with the installed fonts */
+    ClutterColor tc = { 255, 255, 255, 255 }; PangoFontDescription *fd; PangoLayout *pl; int lw, lh;
+    ClutterActor *t = clutter_text_new_full ("Sans 18", "Clutter on Phorepoc \xc3\xa4\xc3\xb6\xc3\xbc \xce\x91\xce\xb2\xce\xb3", &tc);
+    clutter_actor_set_position (t, 12, height - 60);
+    clutter_actor_add_child (stage, t);
+    pl = clutter_text_get_layout (CLUTTER_TEXT (t));
+    pango_layout_get_pixel_size (pl, &lw, &lh);
+    {
+      PangoFont *f = pango_context_load_font (pango_layout_get_context (pl), pango_context_get_font_description (pango_layout_get_context (pl)));   /* the face fontconfig chose */
+      fd = f ? pango_font_describe (f) : NULL;
+      if (f) g_object_unref (f);
+    }
+    LOG ("[cluttertest] text: layout %dx%d px, %d lines, font '%s'", lw, lh, pango_layout_get_line_count (pl), fd ? pango_font_description_get_family (fd) : "?");
+    if (fd) pango_font_description_free (fd);
+  }
   LOG ("[cluttertest] stage shown, running");
   clutter_main ();
   (void) err;
