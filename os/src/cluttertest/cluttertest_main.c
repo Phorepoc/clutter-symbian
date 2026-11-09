@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <stdint.h>
 #include <clutter/clutter.h>
 
 extern void phe_log (const char *msg);
@@ -203,15 +204,81 @@ extern void phe_clws_screen_size (int *w, int *h);
 /* ======================================================================== the frame side of the registry test (C4, "cluttertest frame")
  * a helper thread blocks on the registry (phe_frame_next, cluttertest.cpp) and hands each imported window to the main loop,
  * which shows it as a texture (ClutterImage) on this process's own small stage */
-extern int phe_frame_next (unsigned *seen, int *id, int *w, int *h, unsigned char **pixels, char *title, int title_len);
+extern int phe_frame_next (unsigned *seen, int *id, int *w, int *h, unsigned char **pixels, int *token, char *title, int title_len);
 extern void phe_frame_free (unsigned char *pixels);
 extern int phe_frame_spawn (void);
 extern int phe_is_frame (void);
 extern int phe_cmd_has (const char *word);
 
-typedef struct { int id, w, h; unsigned char *px; char title[64]; } FrameImport;
+typedef struct { int id, w, h, token; unsigned char *px; char title[64]; } FrameImport;
 static ClutterActor *frame_view;
 static int frame_imports;
+
+/* the GPU path (hildon-port.md 7.47): the window's exported texture, imported once per token (EGL_SYMBIAN_SVGA_SHARE_PH) and shown 1:1
+   (the frame's top-left corner) on a texture actor, flipped (the exporter copies GL rows: its row 0 is the frame's bottom). Each content
+   update is only a redraw: the texture is the window's, on the GPU */
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <cogl/cogl-egl.h>
+#define EGL_SYMBIAN_SVGA_SHARE_PH 0x3FF2
+CoglTexture2D *_cogl_egl_texture_2d_new_from_image (CoglContext *ctx, int width, int height, CoglPixelFormat format,
+                                                    EGLImageKHR image, CoglError **error);
+static ClutterActor *frame_gpu_view;
+static int frame_gpu_token, frame_gpu_shows, frame_gpu_checks;
+static EGLImageKHR frame_gpu_image;
+
+static void
+frame_gpu_check (ClutterActor *stage, gpointer data)
+{
+  /* the pixel check (as the bitmap path's import log): the frame stage's (10,10) after a paint = the window's (10,10) */
+  guchar px[4];
+  (void) data; (void) stage;
+  if (frame_gpu_checks >= 3 || !frame_gpu_token)
+    return;
+  frame_gpu_checks++;
+  cogl_framebuffer_read_pixels (cogl_get_draw_framebuffer (), 10, 10, 1, 1, COGL_PIXEL_FORMAT_BGRA_8888_PRE, px);
+  LOG ("[cluttertest-frame] GPU import check #%d: frame stage pixel(10,10) = %02x%02x%02x%02x", frame_gpu_checks, px[3], px[2], px[1], px[0]);
+}
+
+static gboolean
+frame_show_gpu (FrameImport *f)
+{
+  if (f->token != frame_gpu_token)
+    {
+      CoglContext *ctx = clutter_backend_get_cogl_context (clutter_get_default_backend ());
+      EGLDisplay dpy = cogl_egl_context_get_egl_display (ctx);
+      PFNEGLCREATEIMAGEKHRPROC create = (PFNEGLCREATEIMAGEKHRPROC) eglGetProcAddress ("eglCreateImageKHR");
+      PFNEGLDESTROYIMAGEKHRPROC destroy = (PFNEGLDESTROYIMAGEKHRPROC) eglGetProcAddress ("eglDestroyImageKHR");
+      EGLint attrs[] = { EGL_WIDTH, f->w, EGL_HEIGHT, f->h, EGL_NONE };
+      EGLImageKHR img = create (dpy, EGL_NO_CONTEXT, EGL_SYMBIAN_SVGA_SHARE_PH, (EGLClientBuffer) (intptr_t) f->token, attrs);
+      CoglError *err = NULL;
+      CoglTexture2D *tex = img != EGL_NO_IMAGE_KHR ?
+        _cogl_egl_texture_2d_new_from_image (ctx, f->w, f->h, COGL_PIXEL_FORMAT_BGRA_8888_PRE, img, &err) : NULL;
+      if (!tex)
+        {
+          LOG ("[cluttertest-frame] GPU import of token %d failed (EGL %x, %s)", f->token, eglGetError (), err ? err->message : "-");
+          if (err) cogl_error_free (err);
+          if (img != EGL_NO_IMAGE_KHR) destroy (dpy, img);
+          return FALSE;
+        }
+      clutter_texture_set_cogl_texture (CLUTTER_TEXTURE (frame_gpu_view), COGL_TEXTURE (tex));
+      cogl_object_unref (tex);
+      if (frame_gpu_image)
+        destroy (dpy, frame_gpu_image);
+      frame_gpu_image = img;
+      clutter_actor_set_size (frame_gpu_view, f->w, f->h);
+      clutter_actor_set_pivot_point (frame_gpu_view, 0.5, 0.5);
+      clutter_actor_set_scale (frame_gpu_view, 1.0, -1.0);
+      clutter_actor_hide (frame_view);
+      clutter_actor_show (frame_gpu_view);
+      frame_gpu_token = f->token;
+      frame_gpu_checks = 0;
+      LOG ("[cluttertest-frame] GPU import: window %d '%s' %dx%d, token %d, as a texture (no copy)", f->id, f->title, f->w, f->h, f->token);
+    }
+  frame_gpu_shows++;
+  clutter_actor_queue_redraw (frame_gpu_view);
+  return TRUE;
+}
 
 static gboolean
 frame_show (gpointer data)
@@ -219,6 +286,19 @@ frame_show (gpointer data)
   FrameImport *f = data;
   ClutterContent *img = clutter_actor_get_content (frame_view);
   GError *err = NULL;
+
+  if (f->token)
+    {
+      frame_show_gpu (f);
+      g_free (f);
+      return G_SOURCE_REMOVE;
+    }
+  if (frame_gpu_token)
+    {
+      clutter_actor_hide (frame_gpu_view);
+      clutter_actor_show (frame_view);
+      frame_gpu_token = 0;
+    }
 
   if (clutter_image_set_data (CLUTTER_IMAGE (img), f->px, COGL_PIXEL_FORMAT_BGRA_8888_PRE, f->w, f->h, f->w * 4, &err))
     {
@@ -242,7 +322,7 @@ frame_thread (gpointer data)
   for (;;)
     {
       FrameImport *f = g_new0 (FrameImport, 1);
-      int r = phe_frame_next (&seen, &f->id, &f->w, &f->h, &f->px, f->title, sizeof f->title);
+      int r = phe_frame_next (&seen, &f->id, &f->w, &f->h, &f->px, &f->token, f->title, sizeof f->title);
       if (r < 0) { LOG ("[cluttertest-frame] registry: %d", r); g_free (f); return NULL; }
       if (r == 0) { g_free (f); continue; }
       g_idle_add (frame_show, f);
@@ -264,6 +344,10 @@ frame_main (void)
   clutter_actor_set_content (frame_view, clutter_image_new ());
   clutter_actor_set_size (frame_view, 120, 200);
   clutter_actor_add_child (stage, frame_view);
+  frame_gpu_view = clutter_texture_new ();
+  clutter_actor_hide (frame_gpu_view);
+  clutter_actor_add_child (stage, frame_gpu_view);
+  g_signal_connect (stage, "after-paint", G_CALLBACK (frame_gpu_check), NULL);
   clutter_actor_show (stage);
   LOG ("[cluttertest-frame] up: waiting for windows in the registry");
   g_thread_new ("frame-registry", frame_thread, NULL);

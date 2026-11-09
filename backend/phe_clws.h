@@ -49,6 +49,8 @@ void phe_clws_log (const char *msg);
 int phe_clws_reg_window (const char *title, int type, int x, int y, int w, int h, unsigned state);
 int phe_clws_reg_update (int id, const char *title, int type, int x, int y, int w, int h, unsigned state);
 int phe_clws_reg_content (int id, int w, int h, const void *pixels, int stride, int dx, int dy, int dw, int dh);
+/* the GPU path (hildon-port.md 7.47): the content is the exported texture `token` (EGL_SYMBIAN_SVGA_SHARE_PH) of w x h */
+int phe_clws_reg_content_gpu (int id, int token, int w, int h, int dx, int dy, int dw, int dh);
 void phe_clws_reg_remove (int id);
 
 #ifdef __cplusplus

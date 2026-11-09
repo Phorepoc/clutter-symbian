@@ -31,8 +31,10 @@ GLDEF_C TInt E32Main()
 #include <fbs.h>
 #include "phewinreg.h"
 
-extern "C" int phe_frame_next(unsigned* aSeen, int* aId, int* aW, int* aH, unsigned char** aPixels, char* aTitle, int aTitleLen)
+// aToken: the window's GPU share token (hildon-port.md 7.47; then *aPixels = NULL and the size is the window's), 0 = bitmap content
+extern "C" int phe_frame_next(unsigned* aSeen, int* aId, int* aW, int* aH, unsigned char** aPixels, int* aToken, char* aTitle, int aTitleLen)
 	{
+	*aToken = 0;
 	static RPheWinReg reg;
 	static TBool up;
 	if (!up)
@@ -56,8 +58,19 @@ extern "C" int phe_frame_next(unsigned* aSeen, int* aId, int* aW, int* aH, unsig
 	const TUint me = (TUint)RProcess().Id().Id();
 	for (TInt i = 0; i < n && i < 8; ++i)
 		{
-		if (list[i].iOwner == me || list[i].iBitmap == 0 || (list[i].iState & EPheWinHidden))
+		if (list[i].iOwner == me || (list[i].iBitmap == 0 && list[i].iGpuToken == 0) || (list[i].iState & EPheWinHidden))
 			continue;
+		if (list[i].iGpuToken)
+			{
+			*aId = list[i].iId; *aW = list[i].iGeometry.Width(); *aH = list[i].iGeometry.Height(); *aPixels = NULL;
+			*aToken = list[i].iGpuToken;
+			TBuf8<64> t;
+			t.Copy(list[i].iTitle);
+			const TInt l = Min(t.Length(), aTitleLen - 1);
+			Mem::Copy(aTitle, t.Ptr(), l);
+			aTitle[l] = 0;
+			return 1;
+			}
 		CFbsBitmap* b = new CFbsBitmap;
 		if (!b || b->Duplicate(list[i].iBitmap) != KErrNone)
 			{ delete b; continue; }		// (replaced since the list: the next change brings the new one)

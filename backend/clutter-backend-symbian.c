@@ -22,6 +22,7 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <glib.h>
 
 #include "clutter-backend-private.h"
@@ -43,6 +44,18 @@ void cogl_symbian_onscreen_resize (CoglOnscreen *onscreen, int x, int y, int wid
 
 ClutterBackend *clutter_backend_symbian_new (void);
 
+/* the GPU path of the registry content (hildon-port.md 7.47): EGL_SYMBIAN_SVGA_SHARE_PH images (mesa-symbian egl_symbian.c) */
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <GLES2/gl2.h>
+#include <cogl/cogl-egl.h>
+#define EGL_SYMBIAN_SVGA_SHARE_PH 0x3FF2
+#define EGL_SYMBIAN_SHARE_TOKEN_PH 0x3FF3
+/* Cogl 1.22's own EGLImage texture constructor (cogl-texture-2d-private.h; its X11/Wayland paths use it): Cogl binds the image with
+   glEGLImageTargetTexture2DOES and keeps its texture state cache right */
+CoglTexture2D *_cogl_egl_texture_2d_new_from_image (CoglContext *ctx, int width, int height, CoglPixelFormat format,
+                                                    EGLImageKHR image, CoglError **error);
+
 #define LOG(...) do { char m_[240]; g_snprintf (m_, sizeof m_, __VA_ARGS__); phe_clws_log (m_); } while (0)
 
 /* ======================================================================== types */
@@ -61,6 +74,11 @@ typedef struct {
   gint reg_watchers;             /* frame processes importing the content (the registry tells), 0 = publish nothing */
   guchar *reg_pixels;
   gulong reg_paint_handler;
+  /* the GPU path (hildon-port.md 7.47): an exported texture the frame is copied into, its token published with the content */
+  void *share_image;             /* EGLImageKHR */
+  CoglTexture *share_tex;
+  gint share_token, share_w, share_h;
+  gboolean share_failed;         /* no SVGA share images here (softpipe, the Mali): the bitmap path only */
 } ClutterStageSymbian;
 typedef struct { ClutterStageCoglClass parent_class; } ClutterStageSymbianClass;
 
@@ -230,6 +248,88 @@ stage_reg_meta (ClutterStageSymbian *self)
 }
 
 static void
+stage_share_drop (ClutterStageSymbian *self)
+{
+  if (self->share_tex)
+    cogl_object_unref (self->share_tex);
+  self->share_tex = NULL;
+  if (self->share_image)
+    {
+      CoglContext *ctx = clutter_backend_get_cogl_context (clutter_get_default_backend ());
+      PFNEGLDESTROYIMAGEKHRPROC destroy = (PFNEGLDESTROYIMAGEKHRPROC) eglGetProcAddress ("eglDestroyImageKHR");
+      if (destroy)
+        destroy (cogl_egl_context_get_egl_display (ctx), (EGLImageKHR) self->share_image);   /* ends the export */
+    }
+  self->share_image = NULL;
+  self->share_token = 0;
+}
+
+/* the GPU path: the frame (the back buffer, after the paint and before the swap) is copied on the GPU into an exported texture of the
+   stage's size; the frame process imports that texture by its token. FALSE = not available (the caller publishes a bitmap) */
+static gboolean
+stage_share_copy (ClutterStageSymbian *self, CoglFramebuffer *fb, gint w, gint h)
+{
+  CoglContext *ctx = clutter_backend_get_cogl_context (clutter_get_default_backend ());
+  GLuint handle = 0;
+  GLenum target = 0;
+  GLint prev_tex = 0, prev_fbo = 0;
+
+  if (self->share_failed)
+    return FALSE;
+  if (self->share_tex && (self->share_w != w || self->share_h != h))
+    stage_share_drop (self);              /* a new size = a new texture and token */
+  if (!self->share_tex)
+    {
+      PFNEGLCREATEIMAGEKHRPROC create = (PFNEGLCREATEIMAGEKHRPROC) eglGetProcAddress ("eglCreateImageKHR");
+      EGLDisplay dpy = cogl_egl_context_get_egl_display (ctx);
+      int token = 0;
+      EGLint attrs[] = { EGL_WIDTH, w, EGL_HEIGHT, h, EGL_SYMBIAN_SHARE_TOKEN_PH, (EGLint) (intptr_t) &token, EGL_NONE };
+      EGLImageKHR img = create ? create (dpy, EGL_NO_CONTEXT, EGL_SYMBIAN_SVGA_SHARE_PH, NULL, attrs) : EGL_NO_IMAGE_KHR;
+      CoglError *err = NULL;
+      CoglTexture2D *tex;
+
+      if (img == EGL_NO_IMAGE_KHR)
+        {
+          LOG ("[clutter-symbian] registry: no GPU share images (EGL error %x): bitmap content", eglGetError ());
+          self->share_failed = TRUE;
+          return FALSE;
+        }
+      tex = _cogl_egl_texture_2d_new_from_image (ctx, w, h, COGL_PIXEL_FORMAT_BGRA_8888_PRE, img, &err);
+      if (!tex)
+        {
+          LOG ("[clutter-symbian] registry: the share image is no texture (%s): bitmap content", err ? err->message : "?");
+          if (err)
+            cogl_error_free (err);
+          ((PFNEGLDESTROYIMAGEKHRPROC) eglGetProcAddress ("eglDestroyImageKHR")) (dpy, img);
+          self->share_failed = TRUE;
+          return FALSE;
+        }
+      self->share_image = img;
+      self->share_tex = COGL_TEXTURE (tex);
+      self->share_token = token;
+      self->share_w = w;
+      self->share_h = h;
+      LOG ("[clutter-symbian] registry: window %d content on the GPU, %dx%d, token %d", self->reg_id, w, h, token);
+    }
+  if (!cogl_texture_get_gl_texture (self->share_tex, &handle, &target))
+    return FALSE;
+  /* the frame's rendering is in Cogl's journal until flushed; the copy reads the onscreen (GL framebuffer 0) */
+  (void) fb;
+  cogl_flush ();                                            /* every journal (Cogl 1.x) */
+  glGetIntegerv (GL_TEXTURE_BINDING_2D, &prev_tex);
+  glGetIntegerv (GL_FRAMEBUFFER_BINDING, &prev_fbo);
+  if (prev_fbo != 0)
+    glBindFramebuffer (GL_FRAMEBUFFER, 0);
+  glBindTexture (GL_TEXTURE_2D, handle);
+  glCopyTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h);   /* GL rows: the texture's row 0 is the frame's bottom */
+  glBindTexture (GL_TEXTURE_2D, prev_tex);                  /* (Cogl's binding cache stays true) */
+  if (prev_fbo != 0)
+    glBindFramebuffer (GL_FRAMEBUFFER, prev_fbo);
+  glFlush ();                                               /* to the device before the frame process samples it */
+  return TRUE;
+}
+
+static void
 stage_reg_after_paint (ClutterStage *stage, gpointer data)
 {
   ClutterStageSymbian *self = data;
@@ -244,6 +344,13 @@ stage_reg_after_paint (ClutterStage *stage, gpointer data)
   fb = COGL_FRAMEBUFFER (cogl->onscreen);
   w = cogl_framebuffer_get_width (fb);
   h = cogl_framebuffer_get_height (fb);
+  if (stage_share_copy (self, fb, w, h))
+    {
+      r = phe_clws_reg_content_gpu (self->reg_id, self->share_token, w, h, 0, 0, w, h);
+      if (r < 0)
+        LOG ("[clutter-symbian] registry: window %d GPU content: %d", self->reg_id, r);
+      return;
+    }
   self->reg_pixels = g_realloc (self->reg_pixels, (gsize) w * h * 4);
   /* (after the paint, before the swap: the back buffer holds the frame) */
   if (!cogl_framebuffer_read_pixels (fb, 0, 0, w, h, COGL_PIXEL_FORMAT_BGRA_8888_PRE, self->reg_pixels))
@@ -284,6 +391,7 @@ stage_reg_remove (ClutterStageSymbian *self)
   self->reg_id = 0;
   g_free (self->reg_pixels);
   self->reg_pixels = NULL;
+  stage_share_drop (self);
 }
 
 /* the window and the framebuffer to the size the stage should have now; the stage relays out at that size */

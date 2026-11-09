@@ -300,45 +300,6 @@ extern "C" int phe_clws_next_event(PheClwsEvent* aEv)
 
 extern "C" void phe_clws_set_inner_poll(PheClwsPollFunc aInner) { gInner = aInner; }
 
-// Bounded trace (hildon-port.md 7.46): timed waits, requested vs actual (nanokernel ticks = 1 ms), and who woke the wait.
-// Three summaries of 300 waits each, then silent.
-static void TraceWait(int aReq, TUint32 aGot, TBool aTimerWoke)
-	{
-	static int n, batches, timerWoke, early, onTime, late1, late2, sumReq, sumGot, maxLate;
-	if (batches >= 3) return;
-	n++; sumReq += aReq; sumGot += (int)aGot;
-	if (aTimerWoke)
-		{
-		timerWoke++;
-		const int late = (int)aGot - aReq;
-		if (late < 0) early++; else if (late == 0) onTime++; else if (late == 1) late1++; else late2++;
-		if (late > maxLate) maxLate = late;
-		}
-	if (n == 300)
-		{
-		RDebug::Printf("[clws] waits %d: timer woke %d (early %d, exact %d, +1 ms %d, >=+2 ms %d, max +%d), mean req %d.%02d ms got %d.%02d ms",
-			n, timerWoke, early, onTime, late1, late2, maxLate, sumReq / n, (sumReq % n) * 100 / n, sumGot / n, (sumGot % n) * 100 / n);
-		n = timerWoke = early = onTime = late1 = late2 = sumReq = sumGot = maxLate = 0;
-		batches++;
-		}
-	}
-
-// Bounded trace (7.46): every poll by requested timeout (<0, 0, >0) and path (inner / WSERV pending / wait set).
-static void TracePoll(int aTimeout, int aPath)
-	{
-	static int n, batches, neg, zero, pos, sumPos, path[3];
-	if (batches >= 3) return;
-	n++; path[aPath]++;
-	if (aTimeout < 0) neg++; else if (aTimeout == 0) zero++; else { pos++; sumPos += aTimeout; }
-	if (n == 600)
-		{
-		RDebug::Printf("[clws] polls %d: timeout <0 %d, 0 %d, >0 %d (mean %d ms); path inner %d, pending %d, wait %d",
-			n, neg, zero, pos, pos ? sumPos / pos : 0, path[0], path[1], path[2]);
-		n = neg = zero = pos = sumPos = path[0] = path[1] = path[2] = 0;
-		batches++;
-		}
-	}
-
 extern "C" int phe_clws_poll(PheClwsPollFD* aFds, unsigned aN, int aTimeout)
 	{
 	// split: the WSERV pseudo descriptors are answered here, the real ones go to the helper (and the interrupt pipe after them)
@@ -352,7 +313,6 @@ extern "C" int phe_clws_poll(PheClwsPollFD* aFds, unsigned aN, int aTimeout)
 		else fds[n++] = aFds[i];
 		}
 	int result;
-	TracePoll(aTimeout, !gUp || nws == 0 ? 0 : phe_clws_pending() ? 1 : 2);
 	if (!gUp || nws == 0)
 		result = gInner(fds, n, aTimeout);
 	else if (phe_clws_pending())
@@ -367,7 +327,6 @@ extern "C" int phe_clws_poll(PheClwsPollFD* aFds, unsigned aN, int aTimeout)
 		// RTimer::After (localif.cpp, as in the 2010 source), which runs on the 1/64 s user tick, so a 16 ms frame wait took 31 ms
 		// (the 33 fps ceiling, hildon-port.md 7.45). RTimer::HighRes runs on the nanokernel tick (1 ms here).
 		const TBool timed = aTimeout > 0;
-		const TUint32 t0 = User::NTickCount();
 		if (timed)
 			{
 			gTm.Issue();
@@ -380,7 +339,6 @@ extern "C" int phe_clws_poll(PheClwsPollFD* aFds, unsigned aN, int aTimeout)
 		WaitAny(all, 5);
 		if (timed)
 			{
-			TraceWait(aTimeout, User::NTickCount() - t0, gTm.Done());
 			if (!gTm.Done())
 				gTimer.Cancel();
 			Settle(gTm);
@@ -495,6 +453,16 @@ extern "C" int phe_clws_reg_content(int aId, int aW, int aH, const void* aPixels
 		Mem::Copy(dst + y * dstride, (const TUint8*)aPixels + y * aStride, aW * 4);
 	bmp->EndDataAccess(EFalse);
 	return gReg.Content(aId, bmp->Handle(), TRect(TPoint(aDx, aDy), TSize(aDw, aDh)));
+	}
+
+// the GPU path (hildon-port.md 7.47): the content is an exported texture; no bitmap is published (an importer that cannot take the
+// token gets no content until the backend falls back to bitmaps)
+extern "C" int phe_clws_reg_content_gpu(int aId, int aToken, int aW, int aH, int aDx, int aDy, int aDw, int aDh)
+	{
+	(void)aW; (void)aH;
+	if (!gRegUp)
+		return KErrNotReady;
+	return gReg.Content(aId, 0, TRect(TPoint(aDx, aDy), TSize(aDw, aDh)), aToken);
 	}
 
 extern "C" void phe_clws_reg_remove(int aId)
