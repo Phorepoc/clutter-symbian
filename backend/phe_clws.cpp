@@ -179,8 +179,10 @@ extern "C" void phe_clws_window_set_visible(void* aW, int aVisible)
 	gWs.Flush();
 	}
 
-extern "C" void phe_clws_window_raise(void*, int aPriority)
+extern "C" void phe_clws_window_raise(void* aW, int aPriority)
 	{
+	if (aW)
+		static_cast<RWindow*>(aW)->SetOrdinalPosition(0);		// the window in front of its siblings (the app's other stages)
 	gGroup->SetOrdinalPosition(0, aPriority);
 	gWs.Flush();
 	}

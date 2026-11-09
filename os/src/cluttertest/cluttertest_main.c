@@ -142,6 +142,23 @@ on_press (ClutterActor *stage, ClutterEvent *ev, gpointer data)
   return CLUTTER_EVENT_STOP;
 }
 
+static gboolean
+on_press2 (ClutterActor *stage, ClutterEvent *ev, gpointer data)
+{
+  gfloat x, y; (void) data;
+  clutter_event_get_coords (ev, &x, &y);
+  LOG ("[cluttertest] SECOND stage: button %u press at %.0f,%.0f", clutter_event_get_button (ev), x, y);
+  return CLUTTER_EVENT_STOP;
+}
+
+static gint s2_paints;
+static void
+after_paint2 (ClutterActor *stage, gpointer data)
+{
+  (void) stage; (void) data;
+  if (s2_paints++ < 3) LOG ("[cluttertest] second stage painted (%d)", s2_paints);
+}
+
 static gint motions;
 
 static gboolean
@@ -220,6 +237,18 @@ phe_clutter_main (void)
   if (!g_getenv ("CLUTTER_UNCAPPED")) { g_timeout_add_seconds (14, uncap, NULL); g_timeout_add_seconds (28, steady_blur, NULL); g_timeout_add_seconds (42, no_blur, NULL); g_timeout_add_seconds (56, one_quad, NULL); }          /* 14 s at the default 60 fps cap, then as fast as it goes */
   clutter_timeline_start (tl);
   clutter_actor_show (stage);
+  {
+    /* the two-stage test: a second, smaller stage (its own window and EGL surface through Cogl's symbian platform), shown over the first */
+    ClutterActor *s2 = clutter_stage_new (), *r = clutter_actor_new (); ClutterColor c2 = { 200, 60, 40, 255 }, cr = { 240, 230, 80, 255 };
+    clutter_actor_set_size (s2, 160, 120);
+    clutter_actor_set_background_color (s2, &c2);
+    clutter_actor_set_size (r, 60, 40); clutter_actor_set_position (r, 50, 40); clutter_actor_set_background_color (r, &cr);
+    clutter_actor_add_child (s2, r);
+    g_signal_connect (s2, "button-press-event", G_CALLBACK (on_press2), NULL);
+    g_signal_connect (s2, "after-paint", G_CALLBACK (after_paint2), NULL);
+    clutter_actor_show (s2);
+    LOG ("[cluttertest] second stage shown (160x120)");
+  }
   LOG ("[cluttertest] stage shown, running");
   clutter_main ();
   (void) err;

@@ -255,6 +255,7 @@ clutter_stage_symbian_show (ClutterStageWindow *stage_window, gboolean do_raise)
   if (cogl->onscreen)
     {
       cogl_onscreen_show (cogl->onscreen);
+      LOG ("[clutter-symbian] stage shown: window %p", cogl_symbian_onscreen_get_window (cogl->onscreen));
       phe_clws_window_raise (cogl_symbian_onscreen_get_window (cogl->onscreen), window_priority ());   /* the app's group in front: it gets the keyboard focus */
     }
   self->shown = TRUE;
@@ -585,6 +586,9 @@ translate (ClutterBackend *backend, const PheClwsEvent *e)
     case PHE_CLWS_REDRAW:
       {
         ClutterStageSymbian *self = stage_of_window (e->window);
+        static int traced;
+        if (traced++ < 6)
+          LOG ("[clutter-symbian] redraw %p %d,%d %dx%d -> stage %p", e->window, e->x, e->y, e->w, e->h, (void *) self);
         if (self)
           clutter_actor_queue_redraw (CLUTTER_ACTOR (CLUTTER_STAGE_COGL (self)->wrapper));
         break;

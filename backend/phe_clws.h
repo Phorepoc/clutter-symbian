@@ -33,7 +33,7 @@ void *phe_clws_window_new (int x, int y, int width, int height, int visible);
 void phe_clws_window_set_extent (void *window, int x, int y, int width, int height);
 void phe_clws_window_size (void *window, int *width, int *height);
 void phe_clws_window_set_visible (void *window, int visible);
-void phe_clws_window_raise (void *window, int priority);    /* the app's window group to the front (ordinal 0) with that priority, and the keyboard focus */
+void phe_clws_window_raise (void *window, int priority);    /* the window in front of the app's other windows, the app's window group to the front with that priority (and the keyboard focus) */
 void phe_clws_window_destroy (void *window);
 int  phe_clws_pending (void);                               /* a WSERV event or redraw is waiting */
 int  phe_clws_next_event (PheClwsEvent *ev);                /* 1 = an event was taken */

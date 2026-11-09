@@ -29,6 +29,8 @@
 #include "cogl-framebuffer-private.h"
 #include "cogl-onscreen-private.h"
 #include "cogl-error-private.h"
+#include "cogl-context-private.h"
+#include "cogl-flags.h"
 #include "phe_clws.h"
 
 const CoglWinsysVtable *_cogl_winsys_egl_symbian_get_vtable (void);
@@ -150,6 +152,17 @@ _cogl_winsys_egl_context_created (CoglDisplay *display,
                    COGL_WINSYS_ERROR_CREATE_CONTEXT,
                    "%s", error_message);
   return FALSE;
+}
+
+/* every onscreen has its own window and surface: several at once (as egl-x11's context_init) */
+static CoglBool
+_cogl_winsys_egl_context_init (CoglContext *context,
+                               CoglError **error)
+{
+  context->feature_flags |= COGL_FEATURE_ONSCREEN_MULTIPLE;
+  COGL_FLAGS_SET (context->features, COGL_FEATURE_ID_ONSCREEN_MULTIPLE, TRUE);
+  COGL_FLAGS_SET (context->winsys_features, COGL_WINSYS_FEATURE_MULTIPLE_ONSCREEN, TRUE);
+  return TRUE;
 }
 
 static void
@@ -283,6 +296,7 @@ _cogl_winsys_egl_vtable =
     .display_setup = _cogl_winsys_egl_display_setup,
     .display_destroy = _cogl_winsys_egl_display_destroy,
     .context_created = _cogl_winsys_egl_context_created,
+    .context_init = _cogl_winsys_egl_context_init,
     .cleanup_context = _cogl_winsys_egl_cleanup_context,
     .onscreen_init = _cogl_winsys_egl_onscreen_init,
     .onscreen_deinit = _cogl_winsys_egl_onscreen_deinit
