@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 //
 // cluttertest.mmp -- the Clutter feasibility test (docs hildon-port.md 7.33): Clutter 1.26 + Cogl 1.22 (libclutter.a, libcogl*.a, libjson-glib.a, recipes/build_*_x32.sh) statically linked, on GLib / Pango / Cairo DLLs
-// and the GLES2 / EGL front DLLs; the WSERV window is Cogl's native window (cluttertest.cpp: phe_cogl_native_window).
+// and the GLES2 / EGL front DLLs; the WSERV layer of the "symbian" backend (backend/phe_clws.cpp) is compiled in here.
 TARGET			cluttertest.exe
 TARGETTYPE		exe
 UID				0x1000007a 0xE7015798
@@ -14,5 +14,8 @@ OS_LAYER_SYSTEMINCLUDE_SYMBIAN
 OS_LAYER_LIBC_SYSTEMINCLUDE
 SOURCEPATH		.
 SOURCE			cluttertest.cpp
+SOURCEPATH		../../../backend
+SOURCE			phe_clws.cpp
+USERINCLUDE		../../../backend
 LIBRARY			euser.lib ws32.lib libc.lib libm.lib libpthread.lib pheglib.lib phegobject.lib phegmodule.lib phegthread.lib phepango.lib phecairo.lib pheatk.lib libEGL.lib libGLESv2.lib
 SMPSAFE

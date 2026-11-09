@@ -1,5 +1,5 @@
-# gen_cogl.py SRC OUT -- the files Cogl 1.22.8's configure and make generate, written by hand for the one configuration this port builds: OpenGL ES 2.0 over EGL, the "null" EGL platform
-# (the application hands Cogl its native window), GLib / GType / Pango support, no X11, no SDL, no Wayland, no KMS.
+# gen_cogl.py SRC OUT -- the files Cogl 1.22.8's configure and make generate, written by hand for the one configuration this port builds: OpenGL ES 2.0 over EGL, the "symbian" EGL platform
+# (overlay/cogl-winsys-egl-symbian.c: a WSERV window per onscreen), GLib / GType / Pango support, no X11, no SDL, no Wayland, no KMS.
 #   OUT/config.h, OUT/cogl/cogl-defines.h, OUT/cogl/cogl-gl-header.h, OUT/cogl/cogl-egl-defines.h, OUT/cogl/cogl-enum-types.[ch], OUT/cogl-path/cogl-path-enum-types.[ch]
 import glob
 import os
@@ -13,7 +13,7 @@ os.makedirs(out + '/cogl', exist_ok=True)
 os.makedirs(out + '/cogl-path', exist_ok=True)
 
 symbols = ['COGL_HAS_GLIB_SUPPORT', 'COGL_HAS_GTYPE_SUPPORT', 'COGL_HAS_COGL_PATH_SUPPORT', 'COGL_HAS_GLES', 'CLUTTER_COGL_HAS_GLES', 'COGL_HAS_GLES2', 'COGL_HAS_EGL_SUPPORT',
-           'COGL_HAS_EGL_PLATFORM_POWERVR_NULL_SUPPORT', 'COGL_HAS_POLL_SUPPORT']
+           'COGL_HAS_EGL_PLATFORM_SYMBIAN_SUPPORT', 'COGL_HAS_POLL_SUPPORT']
 defs = ''.join('#define %s 1\n' % s for s in symbols)
 t = open(src + '/cogl/cogl-defines.h.in').read()
 t = t.replace('@COGL_DEFINES@', defs.rstrip('\n')).replace('@COGL_1_MINOR_VERSION@', '22').replace('@COGL_1_MICRO_VERSION@', '8').replace('@COGL_1_VERSION@', '1.22.8')

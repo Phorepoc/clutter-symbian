@@ -1,5 +1,5 @@
 /* cluttertest_main.c -- the Clutter feasibility test (docs hildon-port.md 7.33). BSD-2-Clause (Phorepoc).
- * One stage, a textured actor rotating around its centre, a second textured actor with a ClutterBlurEffect (the offscreen + GLSL path hildon-desktop's task switcher uses), both turning for good;
+ * One full-screen stage (the "symbian" backend's own window; presses move the turning actor, keys are logged, arrows move it), a textured actor rotating around its centre, a second textured actor with a ClutterBlurEffect (the offscreen + GLSL path hildon-desktop's task switcher uses), both turning for good;
  * every two seconds "[cluttertest] N frames in T ms = F fps" (frames counted at the stage's after-paint). CLUTTER_UNCAPPED: the master clock runs as fast as it can (frame rate 1000). */
 #include <stdio.h>
 #include <string.h>
@@ -130,17 +130,77 @@ make_image (int w, int h, int phase)
   return img;
 }
 
+/* input through the backend's device manager (C2): a press moves the turning actor there, keys are logged and the arrows move it */
+static gboolean
+on_press (ClutterActor *stage, ClutterEvent *ev, gpointer data)
+{
+  gfloat x, y; ClutterInputDevice *dev = clutter_event_get_device (ev);
+  clutter_event_get_coords (ev, &x, &y); (void) data;
+  LOG ("[cluttertest] button %u press at %.0f,%.0f (device '%s', clicks %d, source %s)", clutter_event_get_button (ev), x, y, dev ? clutter_input_device_get_device_name (dev) : "-",
+       clutter_event_get_click_count (ev), G_OBJECT_TYPE_NAME (clutter_event_get_source (ev)));
+  clutter_actor_set_position (spin, x - 100, y - 100);
+  return CLUTTER_EVENT_STOP;
+}
+
+static gint motions;
+
+static gboolean
+on_motion (ClutterActor *stage, ClutterEvent *ev, gpointer data)
+{
+  gfloat x, y; (void) data;
+  clutter_event_get_coords (ev, &x, &y);
+  if (motions++ % 20 == 0) LOG ("[cluttertest] motion %d at %.0f,%.0f state 0x%x", motions, x, y, (unsigned) clutter_event_get_state (ev));
+  return CLUTTER_EVENT_PROPAGATE;
+}
+
+static gboolean
+on_key (ClutterActor *stage, ClutterEvent *ev, gpointer data)
+{
+  guint k = clutter_event_get_key_symbol (ev); gfloat x, y; (void) data;
+  LOG ("[cluttertest] key %s keysym 0x%x unicode 0x%x hw %u", clutter_event_type (ev) == CLUTTER_KEY_PRESS ? "press" : "release", k, clutter_event_get_key_unicode (ev),
+       clutter_event_get_key_code (ev));
+  if (clutter_event_type (ev) != CLUTTER_KEY_PRESS) return CLUTTER_EVENT_PROPAGATE;
+  clutter_actor_get_position (spin, &x, &y);
+  if (k == CLUTTER_KEY_Left) x -= 20; else if (k == CLUTTER_KEY_Right) x += 20; else if (k == CLUTTER_KEY_Up) y -= 20; else if (k == CLUTTER_KEY_Down) y += 20;
+  clutter_actor_set_position (spin, x, y);
+  return CLUTTER_EVENT_STOP;
+}
+
+static void
+on_resize (ClutterActor *stage, GParamSpec *ps, gpointer data)
+{
+  gfloat w, h; (void) ps; (void) data;
+  clutter_actor_get_size (stage, &w, &h);
+  LOG ("[cluttertest] stage size %.0fx%.0f, fullscreen %d", w, h, clutter_stage_get_fullscreen (CLUTTER_STAGE (stage)));
+}
+
+static void
+on_activate (ClutterActor *stage, gpointer data)
+{
+  LOG ("[cluttertest] stage %s", data ? "activated (keyboard focus)" : "deactivated");
+}
+
+extern void phe_clws_screen_size (int *w, int *h);
+
 int
-phe_clutter_main (int width, int height)
+phe_clutter_main (void)
 {
   ClutterActor *stage; ClutterTimeline *tl; ClutterColor bg = { 20, 30, 50, 255 };
-  GError *err = NULL;
+  GError *err = NULL; int width, height;
   LOG ("[cluttertest] clutter_init (Clutter %d.%d.%d)", CLUTTER_MAJOR_VERSION, CLUTTER_MINOR_VERSION, CLUTTER_MICRO_VERSION);
   if (clutter_init (NULL, NULL) != CLUTTER_INIT_SUCCESS) { LOG ("[cluttertest] clutter_init failed"); return 1; }
   if (g_getenv ("CLUTTER_UNCAPPED")) clutter_set_default_frame_rate (1000);
   proof_tess_and_png ();
-  stage = clutter_stage_new ();
-  clutter_actor_set_size (stage, width, height);
+  phe_clws_screen_size (&width, &height);
+  stage = clutter_stage_new ();                            /* the backend makes its window: full screen, in the screen's current mode */
+  clutter_stage_set_fullscreen (CLUTTER_STAGE (stage), TRUE);
+  g_signal_connect (stage, "button-press-event", G_CALLBACK (on_press), NULL);
+  g_signal_connect (stage, "motion-event", G_CALLBACK (on_motion), NULL);
+  g_signal_connect (stage, "key-press-event", G_CALLBACK (on_key), NULL);
+  g_signal_connect (stage, "key-release-event", G_CALLBACK (on_key), NULL);
+  g_signal_connect (stage, "notify::size", G_CALLBACK (on_resize), NULL);
+  g_signal_connect (stage, "activate", G_CALLBACK (on_activate), GINT_TO_POINTER (1));
+  g_signal_connect (stage, "deactivate", G_CALLBACK (on_activate), NULL);
   clutter_actor_set_background_color (stage, &bg);
   spin = clutter_actor_new (); clutter_actor_set_size (spin, 200, 200);
   clutter_actor_set_content (spin, make_image (128, 128, 0));

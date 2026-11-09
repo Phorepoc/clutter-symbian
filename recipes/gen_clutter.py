@@ -1,5 +1,5 @@
-# gen_clutter.py SRC OUT MKENUMS GENMARSHAL -- what Clutter 1.26.4's configure and make generate, for the configuration of this port: the EGL ("eglnative") backend over Cogl's GLES2/EGL null platform, the
-# null input backend, no X11 / GDK / Wayland / evdev.  OUT/config.h, OUT/clutter/clutter-config.h, clutter-enum-types.[ch], clutter-marshal.[ch]
+# gen_clutter.py SRC OUT MKENUMS GENMARSHAL -- what Clutter 1.26.4's configure and make generate, for the configuration of this port: the "symbian" windowing and input backend (backend/clutter-backend-symbian.c) over Cogl's
+# GLES2 / EGL "symbian" platform, no X11 / GDK / Wayland / evdev.  OUT/config.h, OUT/clutter/clutter-config.h, clutter-enum-types.[ch], clutter-marshal.[ch]
 import glob
 import os
 import re
@@ -11,7 +11,6 @@ os.makedirs(out + '/clutter', exist_ok=True)
 open(out + '/config.h', 'w').write('''#define GETTEXT_PACKAGE "clutter-1.0"
 #define CLUTTER_LOCALEDIR "z:/resource/locale"
 #define HAVE_COGL_GLES2 1
-#define HAVE_CLUTTER_EGL 1
 #define COGL_HAS_EGL_SUPPORT 1
 #define HAVE_UNISTD_H 1
 #define HAVE_FCNTL_H 1
@@ -27,7 +26,7 @@ open(out + '/config.h', 'w').write('''#define GETTEXT_PACKAGE "clutter-1.0"
 #define CLUTTER_SYSCONFDIR "z:/resource/clutter"
 #define CLUTTER_DRIVERS "gles2"
 ''')
-t = open(src + '/clutter/clutter-config.h.in').read().replace('@CLUTTER_CONFIG_DEFINES@', '#define CLUTTER_WINDOWING_EGL "eglnative"\n#define CLUTTER_INPUT_NULL "null"')
+t = open(src + '/clutter/clutter-config.h.in').read().replace('@CLUTTER_CONFIG_DEFINES@', '#define CLUTTER_WINDOWING_SYMBIAN "symbian"\n#define CLUTTER_INPUT_NULL "null"')
 open(out + '/clutter/clutter-config.h', 'w').write(t)
 skip = re.compile(r'(-private\.h$|clutter-config|clutter-enum-types|clutter-marshal|clutter-x11|clutter-gdk|clutter-wayland|clutter-win32|clutter-osx|clutter-mir|clutter-evdev|clutter-egl|clutter-glx|clutter-cex|clutter-version|clutter-stage-cogl|clutter-backend-)')
 hdrs = sorted(os.path.basename(h) for h in glob.glob(src + '/clutter/*.h') if not skip.search(os.path.basename(h)))
