@@ -275,6 +275,10 @@ cogl_symbian_onscreen_set_composited (CoglOnscreen *onscreen, CoglBool composite
 
 /* composited: no present. The paint is in the back buffer, and the frame was copied out after the paint; without a swap the next
    frame draws over the same buffer (Clutter redraws whole frames here: no buffer age, no swap region) */
+/* for the compositor's bounded frame profile (hildon-port.md 7.53): when the last winsys swap began (after Cogl flushed the
+   framebuffer's journal) and the total time inside the EGL swap */
+gint64 phe_cogl_swap_enter_us, phe_cogl_swap_sum_us;
+
 static void (*parent_swap_buffers_with_damage) (CoglOnscreen *onscreen, const int *rectangles, int n_rectangles);
 
 static void
@@ -283,9 +287,14 @@ _cogl_winsys_onscreen_swap_buffers_with_damage (CoglOnscreen *onscreen, const in
   CoglOnscreenEGL *egl_onscreen = onscreen->winsys;
   CoglOnscreenSymbian *sym_onscreen = egl_onscreen->platform;
 
+  gint64 t0, t1;
   if (sym_onscreen->composited)
     return;
+  t0 = g_get_monotonic_time ();
   parent_swap_buffers_with_damage (onscreen, rectangles, n_rectangles);
+  t1 = g_get_monotonic_time ();
+  phe_cogl_swap_enter_us = t0;
+  phe_cogl_swap_sum_us += t1 - t0;
 }
 
 static void
