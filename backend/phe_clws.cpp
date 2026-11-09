@@ -39,7 +39,8 @@ namespace
 	CWsScreenDevice* gScreen;
 	RWindowGroup* gGroup;
 	TBool gUp;
-	TReq gEv, gRd, gSel;
+	TReq gEv, gRd, gSel, gWt;		// gWt: the window registry's watcher count (C4)
+	TInt gWtSeen = -1;
 	TThreadId gMainId;
 
 	// the poll helper
@@ -206,7 +207,7 @@ extern "C" void phe_clws_window_destroy(void* aW)
 
 extern "C" int phe_clws_pending(void)
 	{
-	return gUp && (gEv.Done() || gRd.Done());
+	return gUp && (gEv.Done() || gRd.Done() || gWt.Done());
 	}
 
 static int Translate(const TWsEvent& aWs, PheClwsEvent* aEv)
@@ -259,6 +260,20 @@ extern "C" int phe_clws_next_event(PheClwsEvent* aEv)
 		if (Translate(ws, aEv))
 			return 1;
 		}
+	if (gWt.Done())
+		{
+		Settle(gWt);
+		const TInt n = gWt.iSt.Int();
+		gWt.iActive = EFalse;
+		if (n < 0)
+			return 0;						// (the registry went away: no more content wanted)
+		gWtSeen = n;
+		extern RPheWinReg gReg;
+		gWt.Issue(); gReg.Watchers(gWtSeen, gWt.iSt);
+		memset(aEv, 0, sizeof *aEv);
+		aEv->type = PHE_CLWS_WATCHERS; aEv->x = n;
+		return 1;
+		}
 	if (gRd.Done())
 		{
 		Settle(gRd);
@@ -309,8 +324,8 @@ extern "C" int phe_clws_poll(PheClwsPollFD* aFds, unsigned aN, int aTimeout)
 		gJobFds = fds; gJobN = n + 1; gJobTimeout = aTimeout; gJobSt = &gSel.iSt; gJobPosted = ETrue;
 		pthread_cond_signal(&gCv);
 		pthread_mutex_unlock(&gMx);
-		TReq* all[3] = { &gSel, &gEv, &gRd };
-		WaitAny(all, 3);
+		TReq* all[4] = { &gSel, &gEv, &gRd, &gWt };
+		WaitAny(all, gWt.iActive ? 4 : 3);
 		if (!gSel.Done())
 			{
 			const char c = 1;
@@ -337,7 +352,7 @@ extern "C" int phe_clws_poll(PheClwsPollFD* aFds, unsigned aN, int aTimeout)
 
 // ======================================================================== the window registry (C4)
 
-static RPheWinReg gReg;
+RPheWinReg gReg;
 static TBool gRegUp;
 struct TRegBitmap { TInt iId; CFbsBitmap* iBitmap; };
 static RArray<TRegBitmap> gRegBitmaps;
@@ -354,6 +369,10 @@ static TInt RegConnect()
 		}
 	const TInt r = gReg.Connect();
 	gRegUp = r == KErrNone;
+	if (gRegUp)
+		{
+		gWt.Issue(); gReg.Watchers(-1, gWt.iSt);		// the count now, then each change (an event: PHE_CLWS_WATCHERS)
+		}
 	return r;
 	}
 

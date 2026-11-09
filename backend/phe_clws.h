@@ -10,7 +10,8 @@ extern "C" {
 
 /* event types */
 enum { PHE_CLWS_NONE = 0, PHE_CLWS_KEY_DOWN = 1, PHE_CLWS_KEY = 2, PHE_CLWS_KEY_UP = 3, PHE_CLWS_POINTER = 4, PHE_CLWS_REDRAW = 5, PHE_CLWS_SCREEN_CHANGED = 6,
-       PHE_CLWS_FOCUS_IN = 7, PHE_CLWS_FOCUS_OUT = 8 };
+       PHE_CLWS_FOCUS_IN = 7, PHE_CLWS_FOCUS_OUT = 8,
+       PHE_CLWS_WATCHERS = 9 /* the window registry's watcher count changed: x = the count (C4) */ };
 /* pointer types = TPointerEvent::TType: 0 button1 down, 1 button1 up, 2 button2 down, 3 up, 4 button3 down, 5 up, 6 drag, 7 move */
 typedef struct {
   int type;

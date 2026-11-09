@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # build_clutter_x32.sh -- IN phorepoc-x86 (volume at /wk, repo :ro at /repo, this repo at /h, siblings at /glib /gtk /dbus): Clutter 1.26.4 (LGPL-2.1+) for x32 over Open C, on Cogl (build_cogl_x32.sh, run first) and
 # GLES2/EGL: the "symbian" backend (backend/clutter-backend-symbian.c: stage windows on WSERV, WSERV events in the GLib main loop), json-glib 1.6.6 for ClutterScript.
-# Out: /wk/clutter-x32/*.o, /wk/out/libclutter.a /wk/out/libjson-glib.a
+# Out: /wk/clutter-x32/*.o, /wk/out/libclutter.a /wk/out/libjson-glib.a, and every Clutter/Cogl archive copied to /o = the ROM build tree's
+# hildon dir (mount it: -v <Symbian-ReverseEngineered>/.phorepoc-x86-build/hildon:/o), which emitter/components.py links from. E.g.
+#   docker run --rm -v hildon-wk5:/wk -v <SRE>:/repo:ro -v <SRE>/.phorepoc-x86-build/hildon:/o -v <Phorepoc>/clutter-symbian:/h \
+#     -v <Phorepoc>/glib-symbian:/glib:ro -v <Phorepoc>/gtk-symbian:/gtk:ro -v <Phorepoc>/dbus-symbian:/dbus:ro phorepoc-x86 bash /h/recipes/build_clutter_x32.sh
 set -eu
+[ -d /o ] || { echo "build_clutter_x32.sh: /o is not mounted (the build tree's .phorepoc-x86-build/hildon): nothing would reach the ROM" >&2; exit 2; }
 . /glib/recipes/pins.sh; . /gtk/recipes/pins.sh; . /h/recipes/pins.sh
 CC=/wk/lsc/bin/pp-gcc
 W=/wk/clutter-src; O=/wk/clutter-x32; mkdir -p $W $O /wk/out

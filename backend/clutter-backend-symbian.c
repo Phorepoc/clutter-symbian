@@ -58,8 +58,7 @@ typedef struct {
   gint width, height;            /* the window size when not full-screen */
   gchar *title;
   gint reg_id;                   /* the window registry's id (C4: phewinreg), 0 = not registered, < 0 = no registry */
-  gint reg_watchers;             /* frame processes importing the content (the last answer), 0 = copy only now and then */
-  guint reg_frames;
+  gint reg_watchers;             /* frame processes importing the content (the registry tells), 0 = publish nothing */
   guchar *reg_pixels;
   gulong reg_paint_handler;
 } ClutterStageSymbian;
@@ -207,10 +206,13 @@ stage_target_size (ClutterStageSymbian *self, gint *w, gint *h)
 /* ======================================================================== the window registry (plan C4, hildon-ui phewinreg)
  * every shown stage is a registered window: its metadata (title, geometry, full-screen / hidden state) and, after each paint,
  * its pixels (one copy into a shared FBSERV bitmap) for the frame process, which imports them as a texture. While nobody
- * watches, the copy is made only every 60th frame (the registry's answer says when a frame process appears). */
+ * watches nothing is copied; when a frame process starts watching, the registry tells the owners (PHE_CLWS_WATCHERS) and
+ * each stage repaints once, which publishes a full frame. (read_pixels per frame is the bootstrap path; buffer sharing follows.) */
 
 #define REG_FULLSCREEN 1   /* EPheWinFullscreen */
 #define REG_HIDDEN 8       /* EPheWinHidden */
+
+static gint reg_watchers_now;   /* the registry's last watcher count */
 
 static void
 stage_reg_meta (ClutterStageSymbian *self)
@@ -237,7 +239,7 @@ stage_reg_after_paint (ClutterStage *stage, gpointer data)
 
   if (self->reg_id <= 0 || cogl->onscreen == NULL)
     return;
-  if (self->reg_watchers <= 0 && (self->reg_frames++ % 60) != 0)
+  if (self->reg_watchers <= 0)
     return;
   fb = COGL_FRAMEBUFFER (cogl->onscreen);
   w = cogl_framebuffer_get_width (fb);
@@ -247,9 +249,8 @@ stage_reg_after_paint (ClutterStage *stage, gpointer data)
   if (!cogl_framebuffer_read_pixels (fb, 0, 0, w, h, COGL_PIXEL_FORMAT_BGRA_8888_PRE, self->reg_pixels))
     return;
   r = phe_clws_reg_content (self->reg_id, w, h, self->reg_pixels, w * 4, 0, 0, w, h);
-  if (r >= 0 && r != self->reg_watchers)
-    LOG ("[clutter-symbian] registry: window %d content %dx%d, %d watching", self->reg_id, w, h, r);
-  self->reg_watchers = r;
+  if (r < 0)
+    LOG ("[clutter-symbian] registry: window %d content: %d", self->reg_id, r);
 }
 
 static void
@@ -261,6 +262,7 @@ stage_reg_show (ClutterStageSymbian *self)
     {
       self->reg_id = phe_clws_reg_window (self->title, 0, 0, 0, cogl_framebuffer_get_width (COGL_FRAMEBUFFER (cogl->onscreen)),
                                           cogl_framebuffer_get_height (COGL_FRAMEBUFFER (cogl->onscreen)), self->fullscreen ? REG_FULLSCREEN : 0);
+      self->reg_watchers = reg_watchers_now;
       LOG ("[clutter-symbian] registry: stage '%s' is window %d", self->title ? self->title : "", self->reg_id);
       if (self->reg_id > 0 && cogl->wrapper)
         self->reg_paint_handler = g_signal_connect (cogl->wrapper, "after-paint", G_CALLBACK (stage_reg_after_paint), self);
@@ -693,6 +695,21 @@ translate (ClutterBackend *backend, const PheClwsEvent *e)
             stage_apply_size (self);
           clutter_actor_queue_redraw (CLUTTER_ACTOR (CLUTTER_STAGE_COGL (self)->wrapper));
         }
+      break;
+    case PHE_CLWS_WATCHERS:
+      {
+        GSList *l;
+        LOG ("[clutter-symbian] registry: %d watching", e->x);
+        reg_watchers_now = e->x;
+        for (l = all_stages; l != NULL; l = l->next)
+          {
+            ClutterStageSymbian *self = l->data;
+            gboolean started = self->reg_watchers <= 0 && e->x > 0;
+            self->reg_watchers = e->x;
+            if (started && self->reg_id > 0)   /* a frame process came: a full frame for it */
+              clutter_actor_queue_redraw (CLUTTER_ACTOR (CLUTTER_STAGE_COGL (self)->wrapper));
+          }
+      }
       break;
     case PHE_CLWS_FOCUS_IN: case PHE_CLWS_FOCUS_OUT:
       {

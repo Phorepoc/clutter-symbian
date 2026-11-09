@@ -148,9 +148,6 @@ on_press2 (ClutterActor *stage, ClutterEvent *ev, gpointer data)
   gfloat x, y; (void) data;
   clutter_event_get_coords (ev, &x, &y);
   LOG ("[cluttertest] SECOND stage: button %u press at %.0f,%.0f", clutter_event_get_button (ev), x, y);
-  /* the second press on it closes it (the single full-screen stage of the scan-out measurement); the first only checks the routing */
-  static int presses;
-  if (++presses == 2 && stage2) { clutter_actor_destroy (stage2); stage2 = NULL; LOG ("[cluttertest] second stage destroyed (2nd click): one full-screen stage"); }
   return CLUTTER_EVENT_STOP;
 }
 
