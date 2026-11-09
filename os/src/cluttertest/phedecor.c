@@ -14,6 +14,7 @@
 #include <clutter/clutter.h>
 #include <string.h>
 #include <stdio.h>
+#include "phelayout.h"
 
 #define BAR_H 44
 #define BTN_W 44
@@ -30,13 +31,14 @@ extern void phe_log (const char *msg);
 extern void phe_frame_relist (void);
 extern void (*clutter_symbian_decor_hook) (int content);
 
-enum { ACT_CLOSE = 1, ACT_MINIMISE = 2, ACT_MAXIMISE = 3, ACT_FOCUS = 4, ACT_RAISE = 5 };   /* TPheWinAction (phewinreg.h) */
+enum { ACT_CLOSE = 1, ACT_MINIMISE = 2, ACT_MAXIMISE = 3, ACT_FOCUS = 4, ACT_RAISE = 5 };
+enum { ACT_SPLIT = 100 };                  /* the frame's own: side by side with the next window (phelayout) */   /* TPheWinAction (phewinreg.h) */
 enum { TYPE_NORMAL = 0, TYPE_DIALOG = 1 };                                                 /* TPheWinType */
 enum { ST_FULLSCREEN = 1, ST_FOCUSED = 16 };
 
 typedef struct {
   int id;
-  ClutterActor *bar, *title, *bmin, *bmax, *bclose;
+  ClutterActor *bar, *title, *bsplit, *bmin, *bmax, *bclose;
   int x, y, w, h;               /* the window's geometry now */
   int sx, sy, sw, sh;           /* the geometry before a maximise (0 x 0 = not maximised) */
   gboolean hung, seen, no_ping;
@@ -78,6 +80,25 @@ float
 phe_decor_scale (int id, int w, int h)
 {
   return decorated_ids && g_hash_table_contains (decorated_ids, GINT_TO_POINTER (id)) ? fit (w, h) : 1;
+}
+
+/* the frame's compositing: where window id's content goes (w x h = its size): PHE_PLACE_FREE (own geometry, phe_decor_content_y +
+ * phe_decor_scale), PHE_PLACE_SET (*x, *y top-left, *k scale) or PHE_PLACE_HIDDEN (phelayout, hildon-port.md 7.51.17) */
+int
+phe_decor_place (int id, int w, int h, float *x, float *y, float *k)
+{
+  PheLayoutPlace pl;
+  gfloat sw = 0, sh = 0;
+  int r;
+  if (stage)
+    clutter_actor_get_size (stage, &sw, &sh);
+  r = phe_layout_place (id, w, h, decorated_ids && g_hash_table_contains (decorated_ids, GINT_TO_POINTER (id)) ? BAR_H : 0,
+                        (int) sw, (int) sh, &pl);
+  if (r == PHE_PLACE_SET)
+    {
+      *x = pl.x; *y = pl.y; *k = pl.scale;
+    }
+  return r;
 }
 
 /* the frame's compositing: FALSE = window id is minimised (its content is not shown) */
@@ -122,6 +143,8 @@ colour (ClutterColor *c, unsigned rgb)
   c->red = rgb >> 16; c->green = (rgb >> 8) & 0xff; c->blue = rgb & 0xff; c->alpha = 255;
 }
 
+static void refresh (void);
+
 static gboolean
 on_button (ClutterActor *actor, ClutterEvent *event, gpointer data)
 {
@@ -164,13 +187,31 @@ on_button (ClutterActor *actor, ClutterEvent *event, gpointer data)
         phe_decor_action (id, ACT_MAXIMISE);
         break;
       }
+    case ACT_SPLIT:
+      {
+        /* split: this window on the left, the next decorated window on the right; pressed again (or one window): back to free */
+        GList *l;
+        int other = 0;
+        if (phe_layout_mode () == PHE_LAYOUT_FREE)
+          for (l = decors; l; l = l->next)
+            if (((Decor *) l->data)->id != id)
+              {
+                other = ((Decor *) l->data)->id;
+                break;
+              }
+        phe_layout_set_mode (other ? PHE_LAYOUT_SPLIT : PHE_LAYOUT_FREE, id, other);
+        r = phe_layout_mode ();
+        phe_frame_relist ();
+        refresh ();
+        break;
+      }
     default:                                /* the title bar itself: focus + raise */
       r = phe_decor_action (id, ACT_FOCUS);
       phe_decor_action (id, ACT_RAISE);
       break;
     }
   LOG ("[phedecor] window %d: %s -> %d", id, what == ACT_CLOSE ? (d->hung ? "close (kill: not responding)" : "close")
-       : what == ACT_MINIMISE ? "minimise" : what == ACT_MAXIMISE ? "maximise" : "focus", r);
+       : what == ACT_MINIMISE ? "minimise" : what == ACT_MAXIMISE ? "maximise" : what == ACT_SPLIT ? "split (mode)" : "focus", r);
   return CLUTTER_EVENT_STOP;
 }
 
@@ -226,6 +267,7 @@ decor_new (int id)
   clutter_actor_set_position (d->title, 12, (BAR_H - 22) / 2);
   clutter_text_set_ellipsize (CLUTTER_TEXT (d->title), PANGO_ELLIPSIZE_END);
   clutter_actor_add_child (d->bar, d->title);
+  d->bsplit = button (d, "\xe2\x80\x96", ACT_SPLIT);       /* double vertical line: side by side */
   d->bmin = button (d, "\xe2\x80\x93", ACT_MINIMISE);       /* en dash */
   d->bmax = button (d, NULL, ACT_MAXIMISE);                 /* outlined square */
   d->bclose = button (d, "\xc3\x97", ACT_CLOSE);            /* multiplication sign */
@@ -262,12 +304,20 @@ refresh (void)
   for (i = 0; i < n; i++)
     if (decorated (&w[i]))
       g_hash_table_add (decorated_ids, GINT_TO_POINTER (w[i].id));
+  {
+    int ids[8];
+    for (i = 0; i < n; i++)
+      ids[i] = w[i].id;
+    phe_layout_sync (ids, n);
+  }
   for (i = 0; i < n; i++)
     {
       Decor *d;
       ClutterColor bg;
       char title[96];
-      int bw = (int) (w[i].w * fit (w[i].w, w[i].h)), bx = bw - 3 * BTN_W, by;
+      int bw = (int) (w[i].w * fit (w[i].w, w[i].h)), bx, by, barx = w[i].x, pr;
+      PheLayoutPlace pl;
+      gfloat sw = 0, sh = 0;
       if (!decorated (&w[i]))
         continue;                           /* full screen, menus, notifications, splash, untitled: no decoration */
       if (g_hash_table_contains (minimised, GINT_TO_POINTER (w[i].id)))
@@ -279,6 +329,10 @@ refresh (void)
           g_hash_table_remove (minimised, GINT_TO_POINTER (w[i].id));   /* focused again (a switcher): restored */
           LOG ("[phedecor] window %d restored (focused)", w[i].id);
         }
+      clutter_actor_get_size (stage, &sw, &sh);
+      pr = phe_layout_place (w[i].id, w[i].w, w[i].h, BAR_H, (int) sw, (int) sh, &pl);
+      if (pr == PHE_PLACE_HIDDEN)
+        continue;                           /* outside the split: no bar (its Decor goes) */
       d = decor_of (w[i].id);
       if (d == NULL)
         d = decor_new (w[i].id);
@@ -288,16 +342,26 @@ refresh (void)
       d->hung = !w[i].no_ping && w[i].ping_pending && w[i].ping_age_ms > HUNG_MS;   /* not ping-capable: never hung */
       /* directly above the window, same width; the frame shows a window that starts under BAR_H lower (phe_decor_content_y) */
       by = (w[i].y < BAR_H ? BAR_H : w[i].y) - BAR_H;
+      if (pr == PHE_PLACE_SET)
+        {
+          barx = pl.bar_x; by = pl.bar_y; bw = pl.bar_w;
+        }
+      bx = bw - 3 * BTN_W;
       clutter_actor_show (d->bar);
-      clutter_actor_set_position (d->bar, w[i].x, by);
+      clutter_actor_set_position (d->bar, barx, by);
       clutter_actor_set_size (d->bar, bw, BAR_H);   /* the window's shown width */
       colour (&bg, d->hung ? 0x6A6A6A : (w[i].state & ST_FOCUSED) ? 0x1C51AF : 0x3A3A3A);
       clutter_actor_set_background_color (d->bar, &bg);
       /* the inner of the maximise square takes the bar colour (an outline); the title stops before the buttons */
       clutter_actor_set_background_color (g_object_get_data (G_OBJECT (d->bmax), "phedecor-inner"), &bg);
-      clutter_actor_set_width (d->title, bx - 12 - 8);
+      clutter_actor_set_width (d->title, bx - BTN_W - 12 - 8);
       snprintf (title, sizeof title, "%s%s", w[i].title, d->hung ? " (not responding)" : "");
       clutter_text_set_text (CLUTTER_TEXT (d->title), title);
+      clutter_actor_set_position (d->bsplit, bx - BTN_W, 0);
+      if (bx - BTN_W < 12 + 40)
+        clutter_actor_hide (d->bsplit);      /* too narrow for a fourth button */
+      else
+        clutter_actor_show (d->bsplit);
       clutter_actor_set_position (d->bmin, bx, 0);
       clutter_actor_set_position (d->bmax, bx + BTN_W, 0);
       clutter_actor_set_position (d->bclose, bx + 2 * BTN_W, 0);

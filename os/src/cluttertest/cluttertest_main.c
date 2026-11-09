@@ -230,6 +230,7 @@ typedef struct { int id, token; ClutterActor *gpu, *bmp; EGLImageKHR image; gboo
 extern int phe_decor_content_y (int id, int y);   /* phedecor.c: a decorated window sits below its title bar */
 extern int phe_decor_shown (int id);               /* phedecor.c: FALSE = minimised by its bar */
 extern float phe_decor_scale (int id, int w, int h);   /* phedecor.c: scale-to-fit under the bar */
+extern int phe_decor_place (int id, int w, int h, float *x, float *y, float *k);   /* phedecor.c: phelayout's placement */
 static ClutterActor *frame_stage;
 static GList *frame_wins;          /* FrameWin, registration order */
 static int frame_checks, frame_lists, frame_frames;
@@ -351,7 +352,9 @@ frame_show (gpointer data)
       FrameWin *f = frame_win (w->id);
       f->seen = TRUE;
       const int cy = phe_decor_content_y (w->id, w->y);
-      if (!phe_decor_shown (w->id))
+      float px = 0, py = 0, pk = 1;
+      const int pr = phe_decor_place (w->id, w->token ? w->w : w->pw, w->token ? w->h : w->ph, &px, &py, &pk);
+      if (!phe_decor_shown (w->id) || pr == 2 /* PHE_PLACE_HIDDEN */)
         {
           clutter_actor_hide (f->gpu);
           clutter_actor_hide (f->bmp);
@@ -363,8 +366,9 @@ frame_show (gpointer data)
       if (w->token && ((w->token == f->token && w->w == f->iw && w->h == f->ih) || frame_import_gpu (f, w)))
         {
           /* flipped about its centre and scaled to fit: the top-left stays at (x, cy) (input maps back through the transform) */
-          const float k = phe_decor_scale (w->id, w->w, w->h);
-          clutter_actor_set_position (f->gpu, w->x - w->w * (1 - k) / 2, cy - w->h * (1 - k) / 2);
+          const float k = pr == 1 /* PHE_PLACE_SET */ ? pk : phe_decor_scale (w->id, w->w, w->h);
+          const float x0 = pr == 1 ? px : w->x, y0 = pr == 1 ? py : cy;
+          clutter_actor_set_position (f->gpu, x0 - w->w * (1 - k) / 2, y0 - w->h * (1 - k) / 2);
           clutter_actor_set_size (f->gpu, w->w, w->h);
           clutter_actor_set_pivot_point (f->gpu, 0.5, 0.5);
           clutter_actor_set_scale (f->gpu, k, -k);
@@ -378,10 +382,10 @@ frame_show (gpointer data)
           if (clutter_image_set_data (CLUTTER_IMAGE (clutter_actor_get_content (f->bmp)), w->px, COGL_PIXEL_FORMAT_BGRA_8888_PRE,
                                       w->pw, w->ph, w->pw * 4, &err))
             {
-              clutter_actor_set_position (f->bmp, w->x, cy);
+              clutter_actor_set_position (f->bmp, pr == 1 ? px : w->x, pr == 1 ? py : cy);
               clutter_actor_set_size (f->bmp, w->pw, w->ph);
               {
-                const float k = phe_decor_scale (w->id, w->pw, w->ph);
+                const float k = pr == 1 ? pk : phe_decor_scale (w->id, w->pw, w->ph);
                 clutter_actor_set_pivot_point (f->bmp, 0, 0);
                 clutter_actor_set_scale (f->bmp, k, k);
               }
