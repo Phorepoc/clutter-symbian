@@ -364,6 +364,9 @@ static int frame_lat_n;
 extern gint64 phe_cogl_swap_enter_us, phe_cogl_swap_sum_us;   /* the Cogl overlay's swap timing (7.53) */
 static gint64 frame_sum_flush, frame_sum_eglswap, frame_swap0, frame_cpu_after, frame_sum_cpu;
 extern long long phe_clws_thread_cpu_us (void);
+extern unsigned phe_clws_fast_ticks (void);
+extern int phe_clws_fast_freq (void);
+static unsigned frame_fc0;
 static void
 frame_registry (int content)
 {
@@ -437,6 +440,7 @@ frame_after_paint (ClutterActor *stage, gpointer data)
   if (!frame_t0)
     {
       frame_t0 = now;
+      frame_fc0 = phe_clws_fast_ticks ();
       frame_wait0 = (gint64) phe_clws_wait_us;
     }
   frame_frames++;
@@ -449,6 +453,15 @@ frame_after_paint (ClutterActor *stage, gpointer data)
   if (now - frame_t0 >= 2000000)
     {
       const gint64 wait = (gint64) phe_clws_wait_us - frame_wait0;
+      {
+        static int clock_checks;
+        const unsigned fc = phe_clws_fast_ticks ();
+        const int ff = phe_clws_fast_freq ();
+        if (clock_checks++ < 3)
+          LOG ("[cluttertest-frame] clocks over this window: monotonic %d ms, fast counter %u ticks at %d Hz = %d ms",
+               (int) ((now - frame_t0) / 1000), fc - frame_fc0, ff, ff > 0 ? (int) ((unsigned long long) (fc - frame_fc0) * 1000u / (unsigned) ff) : -1);
+        frame_fc0 = fc;
+      }
       LOG ("[cluttertest-frame] %d composited frames in %d ms = %.1f fps (%d content ticks, %d lists; per frame: paint %d us, waiting %d us)",
            frame_frames, (int) ((now - frame_t0) / 1000), frame_frames * 1000000.0 / (now - frame_t0), frame_ticks, frame_relists,
            (int) (frame_paint_sum / frame_frames), (int) (wait / frame_frames));

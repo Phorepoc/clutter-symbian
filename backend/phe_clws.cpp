@@ -328,6 +328,10 @@ extern "C" int phe_clws_next_event(PheClwsEvent* aEv)
 
 extern "C" void phe_clws_set_inner_poll(PheClwsPollFunc aInner) { gInner = aInner; }
 
+// the fast counter (raw ticks) and its frequency, to check the clocks against each other (hildon-port.md 7.56)
+extern "C" unsigned phe_clws_fast_ticks(void) { return User::FastCounter(); }
+extern "C" int phe_clws_fast_freq(void) { TInt f = 0; HAL::Get(HAL::EFastCounterFrequency, f); return f; }
+
 // this thread's CPU time in us (RThread::GetCpuTime), or -1 when the kernel does not measure it (hildon-port.md 7.54)
 extern "C" long long phe_clws_thread_cpu_us(void)
 	{
