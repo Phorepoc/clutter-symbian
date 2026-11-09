@@ -68,7 +68,11 @@ extern "C" int phe_frame_list(PheFrameWin* aOut, int aMax)
 		if (!f.iToken && w.iBitmap)
 			{
 			CFbsBitmap* b = new CFbsBitmap;
-			if (b && b->Duplicate(w.iBitmap) == KErrNone)
+			const TInt dr = b ? b->Duplicate(w.iBitmap) : KErrNoMemory;
+			static TInt dupLogged;
+			if (dr != KErrNone && dupLogged++ < 4)
+				RDebug::Printf("[cluttertest-frame] window %d: bitmap %d duplicate failed %d", w.iId, w.iBitmap, dr);
+			if (dr == KErrNone)
 				{
 				const TSize s = b->SizeInPixels();
 				const TInt stride = CFbsBitmap::ScanLineLength(s.iWidth, b->DisplayMode());
