@@ -132,10 +132,12 @@ extern "C" int phe_frame_list(PheFrameWin* aOut, int aMax)
 extern "C" void phe_frame_free(unsigned char* aPixels) { User::Free(aPixels); }
 
 // start the frame-side process (the test's second process)
+extern "C" int phe_cmd_has(const char* aWord);
 extern "C" int phe_frame_spawn(void)
 	{
 	RProcess p;
-	TInt r = p.Create(_L("cluttertest.exe"), _L("frame"));
+	// "registry-split": the frame starts in the split layout (phedecor.c split_tick)
+	TInt r = p.Create(_L("cluttertest.exe"), phe_cmd_has("split") ? TPtrC(_L("frame-split")) : TPtrC(_L("frame")));
 	if (r == KErrNone) { p.Resume(); p.Close(); }
 	return r;
 	}

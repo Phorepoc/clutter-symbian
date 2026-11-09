@@ -222,7 +222,26 @@ button (Decor *d, const char *label, int what)
   ClutterActor *b = clutter_actor_new (), *t;
 
   colour (&fg, 0xFFFFFF);
-  if (label)
+  if (label && label[0] == 1)
+    {
+      /* the split glyph: two outlined rectangles side by side (the UI font has no U+2016 / U+25EB) */
+      int k;
+      t = clutter_actor_new ();
+      clutter_actor_set_size (t, 18, 14);
+      for (k = 0; k < 2; k++)
+        {
+          ClutterActor *o = clutter_actor_new (), *in = clutter_actor_new ();
+          clutter_actor_set_size (o, 8, 14);
+          clutter_actor_set_position (o, k * 10, 0);
+          clutter_actor_set_background_color (o, &fg);
+          clutter_actor_set_size (in, 4, 10);
+          clutter_actor_set_position (in, 2, 2);
+          clutter_actor_add_child (o, in);
+          clutter_actor_add_child (t, o);
+          g_object_set_data (G_OBJECT (b), k ? "phedecor-inner2" : "phedecor-inner", in);
+        }
+    }
+  else if (label)
     t = clutter_text_new_full ("Sans 16", label, &fg);
   else
     {
@@ -267,7 +286,7 @@ decor_new (int id)
   clutter_actor_set_position (d->title, 12, (BAR_H - 22) / 2);
   clutter_text_set_ellipsize (CLUTTER_TEXT (d->title), PANGO_ELLIPSIZE_END);
   clutter_actor_add_child (d->bar, d->title);
-  d->bsplit = button (d, "\xe2\x80\x96", ACT_SPLIT);       /* double vertical line: side by side */
+  d->bsplit = button (d, "\x01", ACT_SPLIT);                /* two outlined rectangles: side by side */
   d->bmin = button (d, "\xe2\x80\x93", ACT_MINIMISE);       /* en dash */
   d->bmax = button (d, NULL, ACT_MAXIMISE);                 /* outlined square */
   d->bclose = button (d, "\xc3\x97", ACT_CLOSE);            /* multiplication sign */
@@ -345,6 +364,10 @@ refresh (void)
       if (pr == PHE_PLACE_SET)
         {
           barx = pl.bar_x; by = pl.bar_y; bw = pl.bar_w;
+          static int last_[16];
+          if (w[i].id > 0 && w[i].id < 16 && last_[w[i].id] != pl.x * 100000 + pl.h && (last_[w[i].id] = pl.x * 100000 + pl.h))
+            LOG ("[phedecor] window %d split: %dx%d -> %d,%d %dx%d k %.3f", w[i].id, w[i].w, w[i].h, pl.x, pl.y, pl.w, pl.h,
+               (double) pl.scale);
         }
       bx = bw - 3 * BTN_W;
       clutter_actor_show (d->bar);
@@ -354,6 +377,8 @@ refresh (void)
       clutter_actor_set_background_color (d->bar, &bg);
       /* the inner of the maximise square takes the bar colour (an outline); the title stops before the buttons */
       clutter_actor_set_background_color (g_object_get_data (G_OBJECT (d->bmax), "phedecor-inner"), &bg);
+      clutter_actor_set_background_color (g_object_get_data (G_OBJECT (d->bsplit), "phedecor-inner"), &bg);
+      clutter_actor_set_background_color (g_object_get_data (G_OBJECT (d->bsplit), "phedecor-inner2"), &bg);
       clutter_actor_set_width (d->title, bx - BTN_W - 12 - 8);
       snprintf (title, sizeof title, "%s%s", w[i].title, d->hung ? " (not responding)" : "");
       clutter_text_set_text (CLUTTER_TEXT (d->title), title);
@@ -429,10 +454,30 @@ phe_decor_hit (float x, float y)
   return 0;
 }
 
+extern int phe_cmd_has (const char *word);
+
+/* the split control, pressed by the frame's command line (a scripted run has no pointer): the first decorated window on the
+ * left, the next on the right, as on_button's ACT_SPLIT; once */
+static gboolean
+split_tick (gpointer data)
+{
+  (void) data;
+  if (g_list_length (decors) < 2)
+    return G_SOURCE_CONTINUE;
+  phe_layout_set_mode (PHE_LAYOUT_SPLIT, ((Decor *) decors->data)->id, ((Decor *) decors->next->data)->id);
+  LOG ("[phedecor] split (command line): %d | %d -> %d", ((Decor *) decors->data)->id, ((Decor *) decors->next->data)->id,
+       phe_layout_mode ());
+  phe_frame_relist ();
+  refresh ();
+  return G_SOURCE_REMOVE;
+}
+
 void
 phe_decor_install (void)
 {
   minimised = g_hash_table_new (NULL, NULL);
   clutter_symbian_decor_hook = on_registry;
   g_timeout_add (2000, ping_tick, NULL);
+  if (phe_cmd_has ("split"))
+    g_timeout_add (2000, split_tick, NULL);   /* "frame-split": the split control pressed once two windows are decorated */
 }
