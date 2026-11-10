@@ -163,7 +163,9 @@ extern "C" void* phe_clws_window_new(int aX, int aY, int aW, int aH, int aVisibl
 	if (!w) return NULL;
 	if (w->Construct(*gGroup, HandleOf(w)) != KErrNone) { delete w; return NULL; }
 	w->SetExtent(TPoint(aX, aY), TSize(aW, aH));
-	w->SetBackgroundColor(KRgbBlack);
+	// no background colour: the window server would fill the window before it replays the frame (a non-redraw BitBlt) on each
+	// redraw of the window, straight into the screen -- a whole black screen for an instant, about one QEMU screendump in six
+	w->SetBackgroundColor();
 	w->PointerFilter(EPointerFilterMove | EPointerFilterDrag | EPointerFilterEnterExit, 0);		// moves and drags are events (pointer tracking, hover)
 	w->SetVisible(aVisible ? ETrue : EFalse);
 	w->Activate();
