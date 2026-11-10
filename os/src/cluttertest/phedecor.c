@@ -465,6 +465,7 @@ edge_new (int id, int axes)
   c.alpha = 0x50;
   clutter_actor_set_background_color (e, &c);
   clutter_actor_set_reactive (e, TRUE);
+  clutter_actor_set_name (e, axes == 1 ? "phedecor-right" : "phedecor-bottom");
   g_object_set_data (G_OBJECT (e), "phedecor-id", GINT_TO_POINTER (id));
   g_object_set_data (G_OBJECT (e), "phedecor-axes", GINT_TO_POINTER (axes));
   g_signal_connect (e, "button-press-event", G_CALLBACK (on_grip_press), NULL);
@@ -483,6 +484,7 @@ decor_new (int id)
   d->id = id;
   d->bar = clutter_actor_new ();
   clutter_actor_set_reactive (d->bar, TRUE);
+  clutter_actor_set_name (d->bar, "phedecor-bar");
   g_object_set_data (G_OBJECT (d->bar), "phedecor-id", GINT_TO_POINTER (id));
   g_signal_connect (d->bar, "button-press-event", G_CALLBACK (on_button), GINT_TO_POINTER (0));
   g_signal_connect (d->bar, "motion-event", G_CALLBACK (on_bar_motion), NULL);
@@ -493,6 +495,7 @@ decor_new (int id)
     clutter_actor_set_background_color (d->grip, &gc);
     clutter_actor_set_size (d->grip, 14, 14);
     clutter_actor_set_reactive (d->grip, TRUE);
+    clutter_actor_set_name (d->grip, "phedecor-grip");
     g_object_set_data (G_OBJECT (d->grip), "phedecor-id", GINT_TO_POINTER (id));
     g_signal_connect (d->grip, "button-press-event", G_CALLBACK (on_grip_press), NULL);
     g_signal_connect (d->grip, "motion-event", G_CALLBACK (on_grip_motion), NULL);
@@ -532,15 +535,23 @@ decor_free (Decor *d)
 }
 
 /* the registry changed (or a ping tick): every decorated window's bar to its window's place, title, colour and buttons */
+static gboolean on_captured (ClutterActor *actor, ClutterEvent *event, gpointer data);
+
 static void
 refresh (void)
 {
   PheDecorWin w[8];
   GList *l, *next;
   int n, i;
+  static gboolean captured;
 
   if (find_stage () == NULL)
     return;
+  if (!captured)
+    {
+      captured = TRUE;
+      g_signal_connect (stage, "captured-event", G_CALLBACK (on_captured), NULL);
+    }
   n = phe_decor_query (w, 8);
   if (n < 0)
     return;
@@ -711,6 +722,75 @@ phe_decor_unminimise (int id)
 }
 
 extern void phe_panel_refresh (void);
+
+/* a stage child's place in the stacking order (higher = above) */
+static int
+clutter_actor_get_child_index_ (ClutterActor *a)
+{
+  ClutterActor *c;
+  int i = 0;
+  for (c = clutter_actor_get_first_child (stage); c; c = clutter_actor_get_next_sibling (c), i++)
+    if (c == a)
+      return i;
+  return -1;
+}
+
+/* the first presses on the stage: which actor Clutter's pick gave each one (input checks, hildon-port.md 7.85) */
+static gboolean
+on_captured (ClutterActor *actor, ClutterEvent *event, gpointer data)
+{
+  static int n;
+  (void) actor; (void) data;
+  if (clutter_event_type (event) == CLUTTER_BUTTON_PRESS && clutter_event_get_button (event) == 1)
+    {
+      gfloat x, y;
+      ClutterActor *src = clutter_event_get_source (event), *top = src, *hit = NULL;
+      GList *l;
+      clutter_event_get_coords (event, &x, &y);
+      if (n < 40)
+        LOG ("[phedecor] press at %.0f,%.0f -> %s '%s'", x, y, src ? G_OBJECT_TYPE_NAME (src) : "-",
+             src && clutter_actor_get_name (src) ? clutter_actor_get_name (src) : "");
+      /* the handles by geometry: the topmost shown handle under the point (QEMU's softpipe pick misses them, hildon-port.md 7.85) */
+      for (l = decors; l; l = l->next)
+        {
+          Decor *d = l->data;
+          ClutterActor *h[3] = { d->grip, d->eright, d->ebottom };
+          int k;
+          for (k = 0; k < 3; k++)
+            {
+              gfloat hx, hy, hw, hh;
+              if (!CLUTTER_ACTOR_IS_MAPPED (h[k]))
+                continue;
+              clutter_actor_get_transformed_position (h[k], &hx, &hy);
+              clutter_actor_get_transformed_size (h[k], &hw, &hh);
+              if (x >= hx && x < hx + hw && y >= hy && y < hy + hh)
+                {
+                  if (n < 40)
+                    LOG ("[phedecor]   on %s of window %d (%.0f,%.0f %.0fx%.0f)", clutter_actor_get_name (h[k]), d->id, hx, hy, hw, hh);
+                  if (!hit || clutter_actor_get_child_index_ (h[k]) > clutter_actor_get_child_index_ (hit))
+                    hit = h[k];
+                }
+            }
+        }
+      while (top && clutter_actor_get_parent (top) && clutter_actor_get_parent (top) != stage)
+        top = clutter_actor_get_parent (top);
+      if (n < 40)
+        {
+          ClutterActor *again = clutter_stage_get_actor_at_pos (CLUTTER_STAGE (stage), CLUTTER_PICK_REACTIVE, x, y);
+          LOG ("[phedecor]   re-pick -> %s '%s'", again ? G_OBJECT_TYPE_NAME (again) : "-",
+               again && clutter_actor_get_name (again) ? clutter_actor_get_name (again) : "");
+        }
+      n++;
+      /* the pick's own answer wins when it is the handle or something stacked above it (a window on top) */
+      if (hit && src != hit && (top == NULL || top == stage || clutter_actor_get_child_index_ (hit) > clutter_actor_get_child_index_ (top)))
+        {
+          LOG ("[phedecor]   press goes to %s (pick gave %s)", clutter_actor_get_name (hit), src ? G_OBJECT_TYPE_NAME (src) : "-");
+          on_grip_press (hit, event, NULL);
+          return CLUTTER_EVENT_STOP;
+        }
+    }
+  return CLUTTER_EVENT_PROPAGATE;
+}
 
 static void
 on_registry (int content)
