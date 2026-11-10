@@ -57,6 +57,20 @@ decorated (const PheDecorWin *w)
 }
 
 static GHashTable *decorated_ids;
+/* the move policy: a floating window dragged by its title bar is shown moved by (dx, dy) -- the frame's placement, as a
+ * compositor's (the owner keeps its own geometry; pointer input maps back through the moved actor). A maximised window and the
+ * split layout's windows do not move; a restored window comes back to where it was moved */
+typedef struct { int dx, dy; } Move;
+static GHashTable *moves;             /* id -> Move* */
+static int drag_id;                   /* the window being dragged (0 = none) */
+static float drag_x0, drag_y0;        /* the press, stage pixels */
+static int drag_dx0, drag_dy0;        /* its move at the press */
+static gboolean movable (int id);
+static Move *
+move_of (int id)
+{
+  return moves && movable (id) ? g_hash_table_lookup (moves, GINT_TO_POINTER (id)) : NULL;
+}
 static GHashTable *minimised;         /* id -> 1: minimised while focused; 2: seen unfocused since; a focus after that restores it */
 
 /* scale-to-fit: 1:1 when bar + window fit the screen, else min ((screen h - bar) / h, screen w / w) */
@@ -112,7 +126,18 @@ phe_decor_shown (int id)
 int
 phe_decor_content_y (int id, int y)
 {
+  const Move *m = move_of (id);
+  if (m)
+    y += m->dy;
   return decorated_ids && g_hash_table_contains (decorated_ids, GINT_TO_POINTER (id)) && y < BAR_H ? BAR_H : y;
+}
+
+/* the frame's compositing: the x to show window id's content at (its own x, plus a title-bar move) */
+int
+phe_decor_content_x (int id, int x)
+{
+  const Move *m = move_of (id);
+  return m ? x + m->dx : x;
 }
 
 static ClutterActor *
@@ -144,6 +169,46 @@ colour (ClutterColor *c, unsigned rgb)
 }
 
 static void refresh (void);
+
+/* a window moves when it is floating: decorated, not maximised (its pre-maximise geometry is not kept), and not in the split */
+static gboolean
+movable (int id)
+{
+  const Decor *d = decor_of (id);
+  return d && !d->sw && phe_layout_mode () == PHE_LAYOUT_FREE;
+}
+
+static gboolean
+on_bar_motion (ClutterActor *actor, ClutterEvent *event, gpointer data)
+{
+  gfloat ex, ey;
+  Move *m;
+  (void) data;
+  if (!drag_id || drag_id != GPOINTER_TO_INT (g_object_get_data (G_OBJECT (actor), "phedecor-id")))
+    return CLUTTER_EVENT_PROPAGATE;
+  clutter_event_get_coords (event, &ex, &ey);
+  m = g_hash_table_lookup (moves, GINT_TO_POINTER (drag_id));
+  m->dx = drag_dx0 + (int) (ex - drag_x0);
+  m->dy = drag_dy0 + (int) (ey - drag_y0);
+  refresh ();
+  phe_frame_relist ();
+  return CLUTTER_EVENT_STOP;
+}
+
+static gboolean
+on_bar_release (ClutterActor *actor, ClutterEvent *event, gpointer data)
+{
+  const Move *m;
+  (void) data;
+  if (!drag_id)
+    return CLUTTER_EVENT_PROPAGATE;
+  clutter_input_device_ungrab (clutter_event_get_device (event));
+  m = g_hash_table_lookup (moves, GINT_TO_POINTER (drag_id));
+  LOG ("[phedecor] window %d: moved by %d,%d", drag_id, m->dx, m->dy);
+  drag_id = 0;
+  (void) actor;
+  return CLUTTER_EVENT_STOP;
+}
 
 static gboolean
 on_button (ClutterActor *actor, ClutterEvent *event, gpointer data)
@@ -205,9 +270,22 @@ on_button (ClutterActor *actor, ClutterEvent *event, gpointer data)
         refresh ();
         break;
       }
-    default:                                /* the title bar itself: focus + raise */
+    default:                                /* the title bar itself: focus + raise, and a drag moves a floating window */
       r = phe_decor_action (id, ACT_FOCUS);
       phe_decor_action (id, ACT_RAISE);
+      if (movable (id) && clutter_event_get_device (event))
+        {
+          Move *m;
+          if (!moves)
+            moves = g_hash_table_new_full (NULL, NULL, NULL, g_free);
+          m = g_hash_table_lookup (moves, GINT_TO_POINTER (id));
+          if (!m)
+            g_hash_table_insert (moves, GINT_TO_POINTER (id), m = g_new0 (Move, 1));
+          clutter_event_get_coords (event, &drag_x0, &drag_y0);
+          drag_dx0 = m->dx; drag_dy0 = m->dy;
+          drag_id = id;
+          clutter_input_device_grab (clutter_event_get_device (event), actor);
+        }
       break;
     }
   LOG ("[phedecor] window %d: %s -> %d", id, what == ACT_CLOSE ? (d->hung ? "close (kill: not responding)" : "close")
@@ -281,6 +359,8 @@ decor_new (int id)
   clutter_actor_set_reactive (d->bar, TRUE);
   g_object_set_data (G_OBJECT (d->bar), "phedecor-id", GINT_TO_POINTER (id));
   g_signal_connect (d->bar, "button-press-event", G_CALLBACK (on_button), GINT_TO_POINTER (0));
+  g_signal_connect (d->bar, "motion-event", G_CALLBACK (on_bar_motion), NULL);
+  g_signal_connect (d->bar, "button-release-event", G_CALLBACK (on_bar_release), NULL);
   colour (&fg, 0xFFFFFF);
   d->title = clutter_text_new_full ("Sans 16", "", &fg);
   clutter_actor_set_position (d->title, 12, (BAR_H - 22) / 2);
@@ -360,7 +440,8 @@ refresh (void)
       d->no_ping = w[i].no_ping;
       d->hung = !w[i].no_ping && w[i].ping_pending && w[i].ping_age_ms > HUNG_MS;   /* not ping-capable: never hung */
       /* directly above the window, same width; the frame shows a window that starts under BAR_H lower (phe_decor_content_y) */
-      by = (w[i].y < BAR_H ? BAR_H : w[i].y) - BAR_H;
+      by = phe_decor_content_y (w[i].id, w[i].y) - BAR_H;
+      barx = phe_decor_content_x (w[i].id, w[i].x);
       if (pr == PHE_PLACE_SET)
         {
           barx = pl.bar_x; by = pl.bar_y; bw = pl.bar_w;

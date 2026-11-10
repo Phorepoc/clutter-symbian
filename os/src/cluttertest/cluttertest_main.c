@@ -230,7 +230,8 @@ typedef struct { int id, token; ClutterActor *gpu, *bmp; EGLImageKHR image; gboo
 extern int phe_decor_content_y (int id, int y);   /* phedecor.c: a decorated window sits below its title bar */
 extern int phe_decor_shown (int id);               /* phedecor.c: FALSE = minimised by its bar */
 extern float phe_decor_scale (int id, int w, int h);   /* phedecor.c: scale-to-fit under the bar */
-extern int phe_decor_place (int id, int w, int h, float *x, float *y, float *k);   /* phedecor.c: phelayout's placement */
+extern int phe_decor_place (int id, int w, int h, float *x, float *y, float *k);
+extern int phe_decor_content_x (int id, int x);   /* phedecor.c: a title-bar move */   /* phedecor.c: phelayout's placement */
 static ClutterActor *frame_stage;
 static GList *frame_wins;          /* FrameWin, registration order */
 static int frame_checks, frame_lists, frame_frames;
@@ -367,7 +368,7 @@ frame_show (gpointer data)
         {
           /* flipped about its centre and scaled to fit: the top-left stays at (x, cy) (input maps back through the transform) */
           const float k = pr == 1 /* PHE_PLACE_SET */ ? pk : phe_decor_scale (w->id, w->w, w->h);
-          const float x0 = pr == 1 ? px : w->x, y0 = pr == 1 ? py : cy;
+          const float x0 = pr == 1 ? px : phe_decor_content_x (w->id, w->x), y0 = pr == 1 ? py : cy;
           clutter_actor_set_position (f->gpu, x0 - w->w * (1 - k) / 2, y0 - w->h * (1 - k) / 2);
           clutter_actor_set_size (f->gpu, w->w, w->h);
           clutter_actor_set_pivot_point (f->gpu, 0.5, 0.5);
@@ -382,7 +383,7 @@ frame_show (gpointer data)
           if (clutter_image_set_data (CLUTTER_IMAGE (clutter_actor_get_content (f->bmp)), w->px, COGL_PIXEL_FORMAT_BGRA_8888_PRE,
                                       w->pw, w->ph, w->pw * 4, &err))
             {
-              clutter_actor_set_position (f->bmp, pr == 1 ? px : w->x, pr == 1 ? py : cy);
+              clutter_actor_set_position (f->bmp, pr == 1 ? px : phe_decor_content_x (w->id, w->x), pr == 1 ? py : cy);
               clutter_actor_set_size (f->bmp, w->pw, w->ph);
               {
                 const float k = pr == 1 ? pk : phe_decor_scale (w->id, w->pw, w->ph);
