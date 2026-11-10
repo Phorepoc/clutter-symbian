@@ -40,7 +40,8 @@ typedef struct {
   int id;
   ClutterActor *bar, *title, *bsplit, *bmin, *bmax, *bclose;
   ClutterActor *grip;           /* the resize grip: the window's bottom-right corner (a floating window only) */
-  ClutterActor *eright, *ebottom;   /* the resize edges: 8 px strips over the window's right and bottom borders */
+  ClutterActor *eright, *ebottom;
+  char *handles;                /* the handle positions last logged */   /* the resize edges: 8 px strips over the window's right and bottom borders */
   float k;                      /* the scale the window is shown at (pointer deltas -> window pixels) */
   int x, y, w, h;               /* the window's geometry now */
   int sx, sy, sw, sh;           /* the geometry before a maximise (0 x 0 = not maximised) */
@@ -457,6 +458,12 @@ static ClutterActor *
 edge_new (int id, int axes)
 {
   ClutterActor *e = clutter_actor_new ();
+  ClutterColor c;
+  /* a faint fill: a strip without one is not picked above the window (QEMU r56: the press went to the content), and it shows
+   * where to grab */
+  colour (&c, 0x8A8A8A);
+  c.alpha = 0x50;
+  clutter_actor_set_background_color (e, &c);
   clutter_actor_set_reactive (e, TRUE);
   g_object_set_data (G_OBJECT (e), "phedecor-id", GINT_TO_POINTER (id));
   g_object_set_data (G_OBJECT (e), "phedecor-axes", GINT_TO_POINTER (axes));
@@ -520,6 +527,7 @@ decor_free (Decor *d)
   clutter_actor_destroy (d->grip);
   clutter_actor_destroy (d->eright);
   clutter_actor_destroy (d->ebottom);
+  g_free (d->handles);
   g_free (d);
 }
 
@@ -652,6 +660,18 @@ refresh (void)
             clutter_actor_show (d->ebottom);
             clutter_actor_set_child_above_sibling (stage, d->eright, NULL);
             clutter_actor_set_child_above_sibling (stage, d->ebottom, NULL);
+            {
+              /* the handles' centres, logged when they move (a scripted drag takes its points from this line) */
+              char hl[96];
+              snprintf (hl, sizeof hl, "right %d,%d bottom %d,%d grip %d,%d", barx + bw - 2, by + BAR_H + (sh - 14) / 2,
+                        barx + (bw - 14) / 2, by + BAR_H + sh - 2, barx + bw - 7, by + BAR_H + sh - 7);
+              if (!d->handles || strcmp (d->handles, hl))
+                {
+                  g_free (d->handles);
+                  d->handles = g_strdup (hl);
+                  LOG ("[phedecor] window %d handles: %s", w[i].id, hl);
+                }
+            }
           }
         }
       else
