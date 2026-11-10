@@ -379,11 +379,19 @@ refresh (void)
       clutter_actor_set_background_color (g_object_get_data (G_OBJECT (d->bmax), "phedecor-inner"), &bg);
       clutter_actor_set_background_color (g_object_get_data (G_OBJECT (d->bsplit), "phedecor-inner"), &bg);
       clutter_actor_set_background_color (g_object_get_data (G_OBJECT (d->bsplit), "phedecor-inner2"), &bg);
-      clutter_actor_set_width (d->title, bx - BTN_W - 12 - 8);
+      /* a narrow bar gives up the title first: the four buttons stay while they fit (4 x 44 = 176 px: a 180 px split half);
+       * only below that the split button goes too (minimise / maximise / close always stay: decorated windows are >= 3 x 44) */
       snprintf (title, sizeof title, "%s%s", w[i].title, d->hung ? " (not responding)" : "");
       clutter_text_set_text (CLUTTER_TEXT (d->title), title);
+      if (bx - BTN_W >= 12 + 40)
+        {
+          clutter_actor_set_width (d->title, bx - BTN_W - 12 - 8);
+          clutter_actor_show (d->title);
+        }
+      else
+        clutter_actor_hide (d->title);
       clutter_actor_set_position (d->bsplit, bx - BTN_W, 0);
-      if (bx - BTN_W < 12 + 40)
+      if (bx - BTN_W < 0)
         clutter_actor_hide (d->bsplit);      /* too narrow for a fourth button */
       else
         clutter_actor_show (d->bsplit);
