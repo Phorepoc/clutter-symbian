@@ -42,6 +42,7 @@ typedef struct {
   int x, y, w, h;               /* the window's geometry now */
   int sx, sy, sw, sh;           /* the geometry before a maximise (0 x 0 = not maximised) */
   gboolean hung, seen, no_ping;
+  gboolean hung_logged;         /* the hung state last logged (every change is logged, outside the bar-line cap) */
 } Decor;
 
 static ClutterActor *stage;
@@ -439,6 +440,12 @@ refresh (void)
       d->x = w[i].x; d->y = w[i].y; d->w = w[i].w; d->h = w[i].h;
       d->no_ping = w[i].no_ping;
       d->hung = !w[i].no_ping && w[i].ping_pending && w[i].ping_age_ms > HUNG_MS;   /* not ping-capable: never hung */
+      if (d->hung != d->hung_logged)
+        {
+          d->hung_logged = d->hung;
+          LOG ("[phedecor] window %d '%s': %s (ping pending %d ms)", w[i].id, w[i].title,
+               d->hung ? "NOT RESPONDING" : "responding again", w[i].ping_pending ? w[i].ping_age_ms : 0);
+        }
       /* directly above the window, same width; the frame shows a window that starts under BAR_H lower (phe_decor_content_y) */
       by = phe_decor_content_y (w[i].id, w[i].y) - BAR_H;
       barx = phe_decor_content_x (w[i].id, w[i].x);
