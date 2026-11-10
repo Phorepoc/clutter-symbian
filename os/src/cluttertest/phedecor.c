@@ -39,6 +39,8 @@ enum { ST_FULLSCREEN = 1, ST_FOCUSED = 16 };
 typedef struct {
   int id;
   ClutterActor *bar, *title, *bsplit, *bmin, *bmax, *bclose;
+  ClutterActor *grip;           /* the resize grip: the window's bottom-right corner (a floating window only) */
+  float k;                      /* the scale the window is shown at (pointer deltas -> window pixels) */
   int x, y, w, h;               /* the window's geometry now */
   int sx, sy, sw, sh;           /* the geometry before a maximise (0 x 0 = not maximised) */
   gboolean hung, seen, no_ping;
@@ -211,6 +213,79 @@ on_bar_release (ClutterActor *actor, ClutterEvent *event, gpointer data)
   return CLUTTER_EVENT_STOP;
 }
 
+/* resizing from the bottom-right corner: a drag on the grip asks the owner for the new size on release (phewinreg Resize, clamped
+ * to the owner's min / max hints; the owner answers with Update). An outline follows the pointer meanwhile */
+static int grip_id;
+static float grip_x0, grip_y0;
+static ClutterActor *grip_outline;
+
+static gboolean
+on_grip_press (ClutterActor *actor, ClutterEvent *event, gpointer data)
+{
+  const int id = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (actor), "phedecor-id"));
+  Decor *d = decor_of (id);
+  ClutterColor c;
+  (void) data;
+  if (!d || !movable (id) || !clutter_event_get_device (event))
+    return CLUTTER_EVENT_STOP;
+  clutter_event_get_coords (event, &grip_x0, &grip_y0);
+  grip_id = id;
+  if (!grip_outline)
+    {
+      grip_outline = clutter_actor_new ();
+      colour (&c, 0x1C51AF);
+      c.alpha = 0x60;
+      clutter_actor_set_background_color (grip_outline, &c);
+      clutter_actor_add_child (stage, grip_outline);
+    }
+  clutter_actor_set_position (grip_outline, clutter_actor_get_x (d->bar), clutter_actor_get_y (d->bar) + BAR_H);
+  clutter_actor_set_size (grip_outline, d->w * d->k, d->h * d->k);
+  clutter_actor_set_child_above_sibling (stage, grip_outline, NULL);
+  clutter_actor_show (grip_outline);
+  clutter_input_device_grab (clutter_event_get_device (event), actor);
+  return CLUTTER_EVENT_STOP;
+}
+
+static gboolean
+on_grip_motion (ClutterActor *actor, ClutterEvent *event, gpointer data)
+{
+  gfloat ex, ey;
+  Decor *d = decor_of (grip_id);
+  (void) actor; (void) data;
+  if (!grip_id || !d)
+    return CLUTTER_EVENT_PROPAGATE;
+  clutter_event_get_coords (event, &ex, &ey);
+  clutter_actor_set_size (grip_outline, MAX (3 * BTN_W, d->w * d->k + ex - grip_x0), MAX (BAR_H, d->h * d->k + ey - grip_y0));
+  return CLUTTER_EVENT_STOP;
+}
+
+static gboolean
+on_grip_release (ClutterActor *actor, ClutterEvent *event, gpointer data)
+{
+  gfloat ex, ey;
+  Decor *d = decor_of (grip_id);
+  int w, h, r;
+  (void) actor; (void) data;
+  if (!grip_id)
+    return CLUTTER_EVENT_PROPAGATE;
+  clutter_input_device_ungrab (clutter_event_get_device (event));
+  clutter_actor_hide (grip_outline);
+  if (d)
+    {
+      clutter_event_get_coords (event, &ex, &ey);
+      w = (int) (d->w + (ex - grip_x0) / d->k);
+      h = (int) (d->h + (ey - grip_y0) / d->k);
+      if (w < 3 * BTN_W)
+        w = 3 * BTN_W;
+      if (h < 1)
+        h = 1;
+      r = phe_decor_resize (grip_id, d->x, d->y, w, h);
+      LOG ("[phedecor] window %d: resize from the corner %dx%d -> %dx%d (%d)", grip_id, d->w, d->h, w, h, r);
+    }
+  grip_id = 0;
+  return CLUTTER_EVENT_STOP;
+}
+
 static gboolean
 on_button (ClutterActor *actor, ClutterEvent *event, gpointer data)
 {
@@ -272,6 +347,12 @@ on_button (ClutterActor *actor, ClutterEvent *event, gpointer data)
         break;
       }
     default:                                /* the title bar itself: focus + raise, and a drag moves a floating window */
+      if (clutter_event_get_click_count (event) == 2 && phe_layout_mode () == PHE_LAYOUT_FREE)
+        {
+          /* a double click on the title = the maximise button (maximise / restore), as desktop window managers do */
+          LOG ("[phedecor] window %d: title double click", id);
+          return on_button (d->bmax, event, GINT_TO_POINTER (ACT_MAXIMISE));
+        }
       r = phe_decor_action (id, ACT_FOCUS);
       phe_decor_action (id, ACT_RAISE);
       if (movable (id) && clutter_event_get_device (event))
@@ -361,6 +442,19 @@ decor_new (int id)
   g_object_set_data (G_OBJECT (d->bar), "phedecor-id", GINT_TO_POINTER (id));
   g_signal_connect (d->bar, "button-press-event", G_CALLBACK (on_button), GINT_TO_POINTER (0));
   g_signal_connect (d->bar, "motion-event", G_CALLBACK (on_bar_motion), NULL);
+  {
+    ClutterColor gc;
+    d->grip = clutter_actor_new ();
+    colour (&gc, 0x8A8A8A);
+    clutter_actor_set_background_color (d->grip, &gc);
+    clutter_actor_set_size (d->grip, 14, 14);
+    clutter_actor_set_reactive (d->grip, TRUE);
+    g_object_set_data (G_OBJECT (d->grip), "phedecor-id", GINT_TO_POINTER (id));
+    g_signal_connect (d->grip, "button-press-event", G_CALLBACK (on_grip_press), NULL);
+    g_signal_connect (d->grip, "motion-event", G_CALLBACK (on_grip_motion), NULL);
+    g_signal_connect (d->grip, "button-release-event", G_CALLBACK (on_grip_release), NULL);
+    clutter_actor_hide (d->grip);
+  }
   g_signal_connect (d->bar, "button-release-event", G_CALLBACK (on_bar_release), NULL);
   colour (&fg, 0xFFFFFF);
   d->title = clutter_text_new_full ("Sans 16", "", &fg);
@@ -372,6 +466,7 @@ decor_new (int id)
   d->bmax = button (d, NULL, ACT_MAXIMISE);                 /* outlined square */
   d->bclose = button (d, "\xc3\x97", ACT_CLOSE);            /* multiplication sign */
   clutter_actor_add_child (stage, d->bar);
+  clutter_actor_add_child (stage, d->grip);
   decors = g_list_append (decors, d);
   return d;
 }
@@ -380,6 +475,7 @@ static void
 decor_free (Decor *d)
 {
   clutter_actor_destroy (d->bar);
+  clutter_actor_destroy (d->grip);
   g_free (d);
 }
 
@@ -495,6 +591,15 @@ refresh (void)
       else
         clutter_actor_show (d->bmin);
       clutter_actor_set_child_above_sibling (stage, d->bar, NULL);   /* above every window actor */
+      d->k = pr == PHE_PLACE_SET ? pl.scale : fit (w[i].w, w[i].h);
+      if (movable (w[i].id) && !d->hung)
+        {
+          clutter_actor_set_position (d->grip, barx + bw - 14, by + BAR_H + (int) (w[i].h * d->k) - 14);
+          clutter_actor_show (d->grip);
+          clutter_actor_set_child_above_sibling (stage, d->grip, NULL);
+        }
+      else
+        clutter_actor_hide (d->grip);
       if (logged < 24)
         {
           logged++;
