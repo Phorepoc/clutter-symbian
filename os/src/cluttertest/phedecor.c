@@ -219,6 +219,7 @@ on_bar_release (ClutterActor *actor, ClutterEvent *event, gpointer data)
 static int grip_id;
 static int grip_axes;                 /* 1 = width (the right edge), 2 = height (the bottom edge), 3 = both (the corner) */
 static float grip_x0, grip_y0;
+static float grip_mx, grip_my;        /* the last motion position of the drag (a release may carry the press position) */
 static ClutterActor *grip_outline;
 
 static gboolean
@@ -228,11 +229,15 @@ on_grip_press (ClutterActor *actor, ClutterEvent *event, gpointer data)
   Decor *d = decor_of (id);
   ClutterColor c;
   (void) data;
+  LOG ("[phedecor] window %d: resize press (axes %d)%s", id,
+       GPOINTER_TO_INT (g_object_get_data (G_OBJECT (actor), "phedecor-axes")),
+       !d ? ", no decoration" : !movable (id) ? ", not movable" : !clutter_event_get_device (event) ? ", no device" : "");
   if (!d || !movable (id) || !clutter_event_get_device (event))
     return CLUTTER_EVENT_STOP;
   clutter_event_get_coords (event, &grip_x0, &grip_y0);
   grip_id = id;
   grip_axes = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (actor), "phedecor-axes"));
+  grip_mx = grip_x0; grip_my = grip_y0;
   if (!grip_outline)
     {
       grip_outline = clutter_actor_new ();
@@ -258,6 +263,7 @@ on_grip_motion (ClutterActor *actor, ClutterEvent *event, gpointer data)
   if (!grip_id || !d)
     return CLUTTER_EVENT_PROPAGATE;
   clutter_event_get_coords (event, &ex, &ey);
+  grip_mx = ex; grip_my = ey;
   if (!(grip_axes & 1))
     ex = grip_x0;
   if (!(grip_axes & 2))
@@ -280,6 +286,10 @@ on_grip_release (ClutterActor *actor, ClutterEvent *event, gpointer data)
   if (d)
     {
       clutter_event_get_coords (event, &ex, &ey);
+      if (ex == grip_x0 && ey == grip_y0)
+        {
+          ex = grip_mx; ey = grip_my;       /* the release came at the press position: the drag ends where it last moved */
+        }
       if (!(grip_axes & 1))
         ex = grip_x0;
       if (!(grip_axes & 2))

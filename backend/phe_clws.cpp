@@ -238,6 +238,9 @@ static int Translate(const TWsEvent& aWs, PheClwsEvent* aEv)
 		const TPointerEvent* p = aWs.Pointer();
 		aEv->type = PHE_CLWS_POINTER; aEv->window = reinterpret_cast<void*>(aWs.Handle());
 		aEv->x = p->iPosition.iX; aEv->y = p->iPosition.iY; aEv->ptype = p->iType; aEv->modifiers = p->iModifiers;
+		static TInt ptraced;			// the first presses / releases / drags with their positions (frame input checks)
+		if (ptraced < 60 && p->iType != TPointerEvent::EMove)
+			RDebug::Printf("[clws] pointer %d at %d,%d (#%d)", p->iType, p->iPosition.iX, p->iPosition.iY, ++ptraced);
 		return 1;
 		}
 	case EEventScreenDeviceChanged:
