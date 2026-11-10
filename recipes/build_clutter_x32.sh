@@ -40,5 +40,6 @@ rm -f /wk/out/libclutter.a; ar rcs /wk/out/libclutter.a $O/*.o
 $CC $FF -c /h/os/src/cluttertest/cluttertest_main.c -o $O/cluttertest_main.o 2> $O/errs.test || { grep -a error $O/errs.test | head; echo "TEST COMPILE FAIL"; }
 $CC $FF -c /h/os/src/cluttertest/phedecor.c -o $O/phedecor.o 2> $O/errs.decor || { grep -a error $O/errs.decor | head; echo "DECOR COMPILE FAIL"; }
 $CC $FF -c /h/os/src/cluttertest/phelayout.c -o $O/phelayout.o 2> $O/errs.layout || { grep -a error $O/errs.layout | head; echo "LAYOUT COMPILE FAIL"; }
-rm -f /wk/out/libcluttertest.a; ar rcs /wk/out/libcluttertest.a $O/cluttertest_main.o $O/phedecor.o $O/phelayout.o
+$CC $FF -c /h/os/src/cluttertest/phepanel.c -o $O/phepanel.o 2> $O/errs.panel || { grep -a error $O/errs.panel | head; echo "PANEL COMPILE FAIL"; }
+rm -f /wk/out/libcluttertest.a; ar rcs /wk/out/libcluttertest.a $O/cluttertest_main.o $O/phedecor.o $O/phelayout.o $O/phepanel.o
 for a in clutter cogl cogl-pango cogl-path json-glib cluttertest; do cp /wk/out/lib$a.a /o/lib$a.a; done; echo "archives copied to the build dir"

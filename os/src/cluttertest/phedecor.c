@@ -40,6 +40,7 @@ typedef struct {
   int id;
   ClutterActor *bar, *title, *bsplit, *bmin, *bmax, *bclose;
   ClutterActor *grip;           /* the resize grip: the window's bottom-right corner (a floating window only) */
+  ClutterActor *eright, *ebottom;   /* the resize edges: 8 px strips over the window's right and bottom borders */
   float k;                      /* the scale the window is shown at (pointer deltas -> window pixels) */
   int x, y, w, h;               /* the window's geometry now */
   int sx, sy, sw, sh;           /* the geometry before a maximise (0 x 0 = not maximised) */
@@ -216,6 +217,7 @@ on_bar_release (ClutterActor *actor, ClutterEvent *event, gpointer data)
 /* resizing from the bottom-right corner: a drag on the grip asks the owner for the new size on release (phewinreg Resize, clamped
  * to the owner's min / max hints; the owner answers with Update). An outline follows the pointer meanwhile */
 static int grip_id;
+static int grip_axes;                 /* 1 = width (the right edge), 2 = height (the bottom edge), 3 = both (the corner) */
 static float grip_x0, grip_y0;
 static ClutterActor *grip_outline;
 
@@ -230,6 +232,7 @@ on_grip_press (ClutterActor *actor, ClutterEvent *event, gpointer data)
     return CLUTTER_EVENT_STOP;
   clutter_event_get_coords (event, &grip_x0, &grip_y0);
   grip_id = id;
+  grip_axes = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (actor), "phedecor-axes"));
   if (!grip_outline)
     {
       grip_outline = clutter_actor_new ();
@@ -255,6 +258,10 @@ on_grip_motion (ClutterActor *actor, ClutterEvent *event, gpointer data)
   if (!grip_id || !d)
     return CLUTTER_EVENT_PROPAGATE;
   clutter_event_get_coords (event, &ex, &ey);
+  if (!(grip_axes & 1))
+    ex = grip_x0;
+  if (!(grip_axes & 2))
+    ey = grip_y0;
   clutter_actor_set_size (grip_outline, MAX (3 * BTN_W, d->w * d->k + ex - grip_x0), MAX (BAR_H, d->h * d->k + ey - grip_y0));
   return CLUTTER_EVENT_STOP;
 }
@@ -273,6 +280,10 @@ on_grip_release (ClutterActor *actor, ClutterEvent *event, gpointer data)
   if (d)
     {
       clutter_event_get_coords (event, &ex, &ey);
+      if (!(grip_axes & 1))
+        ex = grip_x0;
+      if (!(grip_axes & 2))
+        ey = grip_y0;
       w = (int) (d->w + (ex - grip_x0) / d->k);
       h = (int) (d->h + (ey - grip_y0) / d->k);
       if (w < 3 * BTN_W)
@@ -280,7 +291,8 @@ on_grip_release (ClutterActor *actor, ClutterEvent *event, gpointer data)
       if (h < 1)
         h = 1;
       r = phe_decor_resize (grip_id, d->x, d->y, w, h);
-      LOG ("[phedecor] window %d: resize from the corner %dx%d -> %dx%d (%d)", grip_id, d->w, d->h, w, h, r);
+      LOG ("[phedecor] window %d: resize from the %s %dx%d -> %dx%d (%d)", grip_id,
+           grip_axes == 1 ? "right edge" : grip_axes == 2 ? "bottom edge" : "corner", d->w, d->h, w, h, r);
     }
   grip_id = 0;
   return CLUTTER_EVENT_STOP;
@@ -430,6 +442,21 @@ button (Decor *d, const char *label, int what)
   return b;
 }
 
+/* a resize edge: a transparent reactive strip with the grip's handlers, resizing along one axis */
+static ClutterActor *
+edge_new (int id, int axes)
+{
+  ClutterActor *e = clutter_actor_new ();
+  clutter_actor_set_reactive (e, TRUE);
+  g_object_set_data (G_OBJECT (e), "phedecor-id", GINT_TO_POINTER (id));
+  g_object_set_data (G_OBJECT (e), "phedecor-axes", GINT_TO_POINTER (axes));
+  g_signal_connect (e, "button-press-event", G_CALLBACK (on_grip_press), NULL);
+  g_signal_connect (e, "motion-event", G_CALLBACK (on_grip_motion), NULL);
+  g_signal_connect (e, "button-release-event", G_CALLBACK (on_grip_release), NULL);
+  clutter_actor_hide (e);
+  return e;
+}
+
 static Decor *
 decor_new (int id)
 {
@@ -453,7 +480,10 @@ decor_new (int id)
     g_signal_connect (d->grip, "button-press-event", G_CALLBACK (on_grip_press), NULL);
     g_signal_connect (d->grip, "motion-event", G_CALLBACK (on_grip_motion), NULL);
     g_signal_connect (d->grip, "button-release-event", G_CALLBACK (on_grip_release), NULL);
+    g_object_set_data (G_OBJECT (d->grip), "phedecor-axes", GINT_TO_POINTER (3));
     clutter_actor_hide (d->grip);
+    d->eright = edge_new (id, 1);
+    d->ebottom = edge_new (id, 2);
   }
   g_signal_connect (d->bar, "button-release-event", G_CALLBACK (on_bar_release), NULL);
   colour (&fg, 0xFFFFFF);
@@ -467,6 +497,8 @@ decor_new (int id)
   d->bclose = button (d, "\xc3\x97", ACT_CLOSE);            /* multiplication sign */
   clutter_actor_add_child (stage, d->bar);
   clutter_actor_add_child (stage, d->grip);
+  clutter_actor_add_child (stage, d->eright);
+  clutter_actor_add_child (stage, d->ebottom);
   decors = g_list_append (decors, d);
   return d;
 }
@@ -476,6 +508,8 @@ decor_free (Decor *d)
 {
   clutter_actor_destroy (d->bar);
   clutter_actor_destroy (d->grip);
+  clutter_actor_destroy (d->eright);
+  clutter_actor_destroy (d->ebottom);
   g_free (d);
 }
 
@@ -597,9 +631,25 @@ refresh (void)
           clutter_actor_set_position (d->grip, barx + bw - 14, by + BAR_H + (int) (w[i].h * d->k) - 14);
           clutter_actor_show (d->grip);
           clutter_actor_set_child_above_sibling (stage, d->grip, NULL);
+          {
+            /* the edges: 8 px strips centred on the right and bottom borders, short of the grip */
+            const int sh = (int) (w[i].h * d->k);
+            clutter_actor_set_position (d->eright, barx + bw - 4, by + BAR_H);
+            clutter_actor_set_size (d->eright, 8, MAX (0, sh - 14));
+            clutter_actor_set_position (d->ebottom, barx, by + BAR_H + sh - 4);
+            clutter_actor_set_size (d->ebottom, MAX (0, bw - 14), 8);
+            clutter_actor_show (d->eright);
+            clutter_actor_show (d->ebottom);
+            clutter_actor_set_child_above_sibling (stage, d->eright, NULL);
+            clutter_actor_set_child_above_sibling (stage, d->ebottom, NULL);
+          }
         }
       else
-        clutter_actor_hide (d->grip);
+        {
+          clutter_actor_hide (d->grip);
+          clutter_actor_hide (d->eright);
+          clutter_actor_hide (d->ebottom);
+        }
       if (logged < 24)
         {
           logged++;
@@ -616,7 +666,21 @@ refresh (void)
           decors = g_list_delete_link (decors, l);
         }
     }
+  phe_panel_refresh ();                     /* the frame's panel stays above every window and bar (phepanel.c) */
 }
+
+/* the panel's window list: a chosen window comes back from minimised */
+void
+phe_decor_unminimise (int id)
+{
+  if (minimised && g_hash_table_remove (minimised, GINT_TO_POINTER (id)))
+    {
+      LOG ("[phedecor] window %d restored (window list)", id);
+      phe_frame_relist ();
+    }
+}
+
+extern void phe_panel_refresh (void);
 
 static void
 on_registry (int content)
