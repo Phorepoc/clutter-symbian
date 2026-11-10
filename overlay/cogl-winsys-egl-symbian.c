@@ -329,6 +329,15 @@ cogl_symbian_onscreen_resize (CoglOnscreen *onscreen, int x, int y, int width, i
   phe_clws_window_set_extent (((CoglOnscreenSymbian *) egl_onscreen->platform)->window, x, y, width, height);
   if (cogl_framebuffer_get_width (fb) != width || cogl_framebuffer_get_height (fb) != height)
     _cogl_framebuffer_winsys_update_size (fb, width, height);
+  {
+    /* the EGL surface takes the window's new size now (the query re-reads it), not at the end of the next swap: else the
+       first frame after a resize is drawn into the old-size buffer, and a stage that does not paint again keeps showing it
+       (a maximised window's content in the bottom-left corner) */
+    CoglRendererEGL *egl_renderer = fb->context->display->renderer->winsys;
+    EGLint v;
+    if (egl_onscreen->egl_surface != EGL_NO_SURFACE)
+      eglQuerySurface (egl_renderer->edpy, egl_onscreen->egl_surface, EGL_WIDTH, &v);
+  }
 }
 
 static const CoglWinsysEGLVtable
