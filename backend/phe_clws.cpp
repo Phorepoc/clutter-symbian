@@ -43,9 +43,9 @@ namespace
 	TReq gEv, gRd, gSel, gWt, gTm;	// gTm: the poll timeout (RTimer::HighRes)
 	RTimer gTimer;		// gWt: the window registry's watcher count (C4)
 	TInt gWtSeen = -1;
-	TReq gRn, gRc;		// a compositor's registry waits in this wait set (hildon-port.md 7.49): changes (Notify), content ticks (ContentNotify)
+	TReq gRn, gRc;		// a compositor's registry waits in this wait set: changes (Notify), content ticks (ContentNotify)
 	TUint gRnSeen = 1, gRcSeen;
-	TReq gRa;			// an owner's wait for the frames' actions on its windows (hildon-port.md 7.64): ActionNotify
+	TReq gRa;			// an owner's wait for the frames' actions on its windows: ActionNotify
 	TInt gPongs;			// pings answered (bounded log)
 	TThreadId gMainId;
 
@@ -355,18 +355,18 @@ extern "C" int phe_clws_next_event(PheClwsEvent* aEv)
 
 extern "C" void phe_clws_set_inner_poll(PheClwsPollFunc aInner) { gInner = aInner; }
 
-// the fast counter (raw ticks) and its frequency, to check the clocks against each other (hildon-port.md 7.56)
+// the fast counter (raw ticks) and its frequency, to check the clocks against each other
 extern "C" unsigned phe_clws_fast_ticks(void) { return User::FastCounter(); }
 extern "C" int phe_clws_fast_freq(void) { TInt f = 0; HAL::Get(HAL::EFastCounterFrequency, f); return f; }
 
-// this thread's CPU time in us (RThread::GetCpuTime), or -1 when the kernel does not measure it (hildon-port.md 7.54)
+// this thread's CPU time in us (RThread::GetCpuTime), or -1 when the kernel does not measure it
 extern "C" long long phe_clws_thread_cpu_us(void)
 	{
 	TTimeIntervalMicroSeconds t;
 	return RThread().GetCpuTime(t) == KErrNone ? t.Int64() : -1;
 	}
 
-// time blocked in the wait set, for the backend's bounded frame profile (hildon-port.md 7.50)
+// time blocked in the wait set, for the backend's bounded frame profile
 extern "C" { unsigned long long phe_clws_wait_us; }
 static unsigned long long WaitUs(TUint32 aTicks)
 	{
@@ -401,7 +401,7 @@ extern "C" int phe_clws_poll(PheClwsPollFD* aFds, unsigned aN, int aTimeout)
 		pthread_mutex_lock(&gMx);
 		// The timeout is this thread's high-resolution timer, not the helper's poll: Open C's poll/select time out through
 		// RTimer::After (localif.cpp, as in the 2010 source), which runs on the 1/64 s user tick, so a 16 ms frame wait took 31 ms
-		// (the 33 fps ceiling, hildon-port.md 7.45). RTimer::HighRes runs on the nanokernel tick (1 ms here).
+		// (the 33 fps ceiling). RTimer::HighRes runs on the nanokernel tick (1 ms here).
 		const TBool timed = aTimeout > 0;
 		if (timed)
 			{
@@ -534,7 +534,7 @@ extern "C" int phe_clws_reg_content(int aId, int aW, int aH, const void* aPixels
 	return gReg.Content(aId, bmp->Handle(), TRect(TPoint(aDx, aDy), TSize(aDw, aDh)));
 	}
 
-// the GPU path (hildon-port.md 7.47): the content is an exported texture; no bitmap is published (an importer that cannot take the
+// the GPU path: the content is an exported texture; no bitmap is published (an importer that cannot take the
 // token gets no content until the backend falls back to bitmaps)
 extern "C" int phe_clws_reg_content_gpu(int aId, int aToken, int aW, int aH, int aDx, int aDy, int aDw, int aDh)
 	{
@@ -571,7 +571,7 @@ extern "C" int phe_clws_reg_requested(int aId, int* aX, int* aY, int* aW, int* a
 	return KErrNone;
 	}
 
-// a compositor (hildon-port.md 7.49): registry changes and content ticks arrive as events of this wait set (PHE_CLWS_REG_CHANGED /
+// a compositor: registry changes and content ticks arrive as events of this wait set (PHE_CLWS_REG_CHANGED /
 // PHE_CLWS_REG_CONTENT), on the main loop, with no helper thread. The first change event comes at once (the serial starts at 1)
 extern "C" int phe_clws_frame_watch(void)
 	{

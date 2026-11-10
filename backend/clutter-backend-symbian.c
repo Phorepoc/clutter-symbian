@@ -1,7 +1,7 @@
 /*
  * Clutter.
  *
- * clutter-backend-symbian.c -- the "symbian" windowing and input backend of Clutter 1.26 on the Symbian window server (clutter-symbian, docs hildon-port.md plan C, C2).
+ * clutter-backend-symbian.c -- the "symbian" windowing and input backend of Clutter 1.26 on the Symbian window server (clutter-symbian).
  * Derived from Clutter 1.26.4's win32 backend (clutter-backend-win32.c, clutter-device-manager-win32.c, clutter-event-win32.c: one core pointer and keyboard, a GSource whose
  * poll descriptor is the window system's message queue) and the EGL native backend (a ClutterStageCogl subclass over Cogl's EGL winsys). The windows and the WSERV session are
  * backend/phe_clws.cpp, the EGL surfaces Cogl's "symbian" platform (overlay/cogl-winsys-egl-symbian.c).
@@ -45,13 +45,13 @@ void cogl_symbian_onscreen_set_composited (CoglOnscreen *onscreen, CoglBool comp
 
 ClutterBackend *clutter_backend_symbian_new (void);
 
-/* a compositor process (OURS, hildon-port.md 7.49): set this, then phe_clws_frame_watch (); the hook runs on the main loop with
+/* a compositor process (OURS): set this, then phe_clws_frame_watch (); the hook runs on the main loop with
    content = FALSE for a registry change (list again) and TRUE for a content-only update (redraw) */
 void (*clutter_symbian_registry_hook) (int content);
 /* a second listener on the same events: the frame's decorations (cluttertest phedecor.c), independent of the application's hook */
 void (*clutter_symbian_decor_hook) (int content);
 
-/* the GPU path of the registry content (hildon-port.md 7.47): EGL_SYMBIAN_SVGA_SHARE_PH images (mesa-symbian egl_symbian.c) */
+/* the GPU path of the registry content: EGL_SYMBIAN_SVGA_SHARE_PH images (mesa-symbian egl_symbian.c) */
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
@@ -80,15 +80,15 @@ typedef struct {
   gint reg_id;                   /* the window registry's id (C4: phewinreg), 0 = not registered, < 0 = no registry */
   gint reg_icon;                 /* the window's icon for the frame (an FBSERV bitmap handle, clutter_symbian_stage_set_icon), 0 = none */
   gint reg_watchers;             /* frame processes subscribed to this window (the registry tells), 0 = publish nothing */
-  gboolean reg_composited;       /* a frame process composites it: off the window server's screen, no present (7.48) */
+  gboolean reg_composited;       /* a frame process composites it: off the window server's screen, no present */
   guchar *reg_pixels;
   gulong reg_paint_handler;
-  /* the GPU path (hildon-port.md 7.47): an exported texture the frame is copied into, its token published with the content */
+  /* the GPU path: an exported texture the frame is copied into, its token published with the content */
   void *share_image;             /* EGLImageKHR */
   CoglTexture *share_tex;
   gint share_token, share_w, share_h;
   gboolean share_failed;
-  gint64 prof_paint_start;       /* the bounded client-frame profile (7.49) */         /* no SVGA share images here (softpipe, the Mali): the bitmap path only */
+  gint64 prof_paint_start;       /* the bounded client-frame profile */         /* no SVGA share images here (softpipe, a phone GPU): the bitmap path only */
 } ClutterStageSymbian;
 typedef struct { ClutterStageCoglClass parent_class; } ClutterStageSymbianClass;
 
@@ -244,7 +244,7 @@ stage_target_size (ClutterStageSymbian *self, gint *w, gint *h)
 #define REG_ACT_RAISE 5
 #define REG_ACT_RESIZE 6
 
-/* this window's subscriptions now (hildon-port.md 7.48: per window, not a global count); TRUE = a frame process just came */
+/* this window's subscriptions now (per window, not a global count); TRUE = a frame process just came */
 static gboolean
 stage_reg_subs (ClutterStageSymbian *self)
 {
@@ -269,7 +269,7 @@ stage_reg_subs (ClutterStageSymbian *self)
   return started;
 }
 
-/* the owner's size hints for the frame (C5, hildon-port.md 7.64): the stage's minimum size; a stage that is not user-resizable keeps its
+/* the owner's size hints for the frame: the stage's minimum size; a stage that is not user-resizable keeps its
    size (max = min = now); the size the application asked for is the preferred one */
 static void
 stage_reg_hints (ClutterStageSymbian *self)
@@ -409,7 +409,7 @@ stage_share_copy (ClutterStageSymbian *self, CoglFramebuffer *fb, gint w, gint h
   glFlush ();                                               /* to the device before the frame process samples it */
   p2 = g_get_monotonic_time ();
   {
-    /* bounded profile (7.49): per frame, the journal flush (the paint's GL calls + command buffer), the copy + flush, and the
+    /* bounded profile: per frame, the journal flush (the paint's GL calls + command buffer), the copy + flush, and the
        interval between frames; three summaries of 120 frames, then silent */
     static gint64 last, sum_flush, sum_copy, sum_iv, sum_paint, other_us, wait0;
     static int n, batches;
@@ -892,7 +892,7 @@ translate_pointer (ClutterBackend *backend, const PheClwsEvent *e)
   _clutter_event_push (event, FALSE);
 }
 
-/* a frame's action on one of our registry windows (C5, hildon-port.md 7.64; pings are answered inside phe_clws) */
+/* a frame's action on one of our registry windows (C5; pings are answered inside phe_clws) */
 static void
 reg_action (ClutterBackend *backend, int id, int action)
 {
@@ -978,7 +978,7 @@ translate (ClutterBackend *backend, const PheClwsEvent *e)
         }
       break;
     case PHE_CLWS_REG_CHANGED: case PHE_CLWS_REG_CONTENT:
-      /* a compositor's registry events (hildon-port.md 7.49), on the main loop: to the application's hook */
+      /* a compositor's registry events, on the main loop: to the application's hook */
       if (clutter_symbian_registry_hook)
         clutter_symbian_registry_hook (e->type == PHE_CLWS_REG_CONTENT);
       if (clutter_symbian_decor_hook)
@@ -1015,13 +1015,25 @@ translate (ClutterBackend *backend, const PheClwsEvent *e)
             crossing->crossing.stage = CLUTTER_STAGE_COGL (self)->wrapper;
             crossing->crossing.source = CLUTTER_ACTOR (crossing->crossing.stage);
             clutter_event_set_device (crossing, dm->core_pointer);
-            _clutter_input_device_set_stage (dm->core_pointer, NULL);
+            /* the pointer device keeps its stage: a release still waiting in the stage's queue is picked through it, and with
+             * no stage Clutter drops it (_clutter_input_device_update returns NULL; the title bar's release after its raise,
+             *). The next pointer event sets it again (clutter_event_dispatch). */
             self->pointer_inside = FALSE;
             _clutter_event_push (crossing, FALSE);
           }
         break;
       }
     }
+}
+
+/* a pointer event waiting until the stage has processed the one before it (see clutter_event_dispatch) */
+static ClutterEvent *held_event;
+
+static gboolean
+pointer_event (const ClutterEvent *event)
+{
+  ClutterEventType t = clutter_event_type (event);
+  return t == CLUTTER_BUTTON_PRESS || t == CLUTTER_BUTTON_RELEASE || t == CLUTTER_MOTION;
 }
 
 static gboolean
@@ -1031,7 +1043,15 @@ clutter_event_prepare (GSource *source, gint *timeout)
 
   _clutter_threads_acquire_lock ();
   *timeout = -1;
-  retval = clutter_events_pending () || phe_clws_pending ();
+  if (held_event)
+    {
+      /* ready once the stage's frame took the previous pointer event; until then look again shortly */
+      retval = !_clutter_stage_has_queued_events (held_event->any.stage);
+      if (!retval)
+        *timeout = 4;
+    }
+  else
+    retval = clutter_events_pending () || phe_clws_pending ();
   _clutter_threads_release_lock ();
   return retval;
 }
@@ -1043,7 +1063,10 @@ clutter_event_check (GSource *source)
   gboolean retval;
 
   _clutter_threads_acquire_lock ();
-  retval = (es->pfd.revents & G_IO_IN) ? (clutter_events_pending () || phe_clws_pending ()) : clutter_events_pending ();
+  if (held_event)
+    retval = !_clutter_stage_has_queued_events (held_event->any.stage);
+  else
+    retval = (es->pfd.revents & G_IO_IN) ? (clutter_events_pending () || phe_clws_pending ()) : clutter_events_pending ();
   _clutter_threads_release_lock ();
   return retval;
 }
@@ -1056,13 +1079,39 @@ clutter_event_dispatch (GSource *source, GSourceFunc callback, gpointer user_dat
   PheClwsEvent e;
 
   _clutter_threads_acquire_lock ();
-  /* take WSERV events until one of them turns into Clutter events (clutter-event-win32.c: PeekMessage until the queue has one) */
-  while (!clutter_events_pending () && phe_clws_next_event (&e))
-    translate (es->backend, &e);
-  if ((event = clutter_event_get ()))
+  if ((event = held_event) == NULL)
+    {
+      /* take WSERV events until one of them turns into Clutter events (clutter-event-win32.c: PeekMessage until the queue has one) */
+      while (!clutter_events_pending () && phe_clws_next_event (&e))
+        translate (es->backend, &e);
+      event = clutter_event_get ();
+    }
+  held_event = NULL;
+  if (event)
     {
       if (event->any.stage)
-        _clutter_stage_queue_event (event->any.stage, event, FALSE);
+        {
+          if (pointer_event (event))
+            {
+              /* Clutter picks a pointer event at the device's stored position (_clutter_input_device_update), not the event's
+               * own, and the stage processes its queue once per frame: with several pointer events queued in one slow frame
+               * (QEMU softpipe) a press was picked where a later motion was. So one pointer event at a
+               * time goes into the stage's queue, and the device position is that event's. */
+              gfloat px, py;
+              if (_clutter_stage_has_queued_events (event->any.stage))
+                {
+                  held_event = event;
+                  _clutter_threads_release_lock ();
+                  return TRUE;
+                }
+              clutter_event_get_coords (event, &px, &py);
+              if (clutter_event_get_device (event))
+                _clutter_input_device_set_stage (clutter_event_get_device (event), event->any.stage);
+              if (clutter_event_get_device (event))
+                _clutter_input_device_set_coords (clutter_event_get_device (event), NULL, px, py, event->any.stage);
+            }
+          _clutter_stage_queue_event (event->any.stage, event, FALSE);
+        }
       else
         clutter_event_free (event);
     }
@@ -1139,7 +1188,7 @@ clutter_backend_symbian_dispose (GObject *gobject)
   G_OBJECT_CLASS (_clutter_backend_symbian_parent_class)->dispose (gobject);
 }
 
-/* user resize as clutter-backend-x11.c: the frame process resizes windows (the registry's resize action, hildon-port.md 7.64),
+/* user resize as clutter-backend-x11.c: the frame process resizes windows (the registry's resize action),
    so clutter_stage_set_user_resizable must reach the stage window (Clutter ignores it without this feature) */
 static ClutterFeatureFlags
 clutter_backend_symbian_get_features (ClutterBackend *backend)

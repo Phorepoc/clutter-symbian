@@ -1,7 +1,7 @@
 /* Copyright The Phorepoc Authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * phepanel.c -- the frame's panel (hildon-port.md 7.82): a 44 px button in the stage's bottom-left corner, above every window,
+ * phepanel.c -- the frame's panel: a 44 px button in the stage's bottom-left corner, above every window,
  * that opens the window list: every titled window the frame lists, minimised ones included; a tap restores, focuses and raises
  * it. The list closes on a second press of the button or after a choice. Etesian tokens as phedecor.c (#3A3A3A, focused #1C51AF). */
 #include <clutter/clutter.h>

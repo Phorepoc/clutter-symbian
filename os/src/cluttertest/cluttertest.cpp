@@ -1,7 +1,7 @@
 // Copyright The Phorepoc Authors
 // SPDX-License-Identifier: BSD-2-Clause
 //
-// cluttertest.cpp -- entry point of the Clutter test (docs hildon-port.md 7.33-7.36): the stage window, its WSERV session and the events are Clutter's own now (the "symbian"
+// cluttertest.cpp -- entry point of the Clutter test: the stage window, its WSERV session and the events are Clutter's own now (the "symbian"
 // backend, clutter-symbian backend/), so this only sets the environment and runs cluttertest_main.c inside a trap level.
 #include <e32std.h>
 #include <e32base.h>
@@ -51,9 +51,9 @@ GLDEF_C TInt E32Main()
 	return err ? err : rc;
 	}
 
-// ======================================================================== the frame side of the window registry test (hildon-port.md C4)
+// ======================================================================== the frame side of the window registry test
 // "cluttertest frame": a second process plays the frame process: it waits for registry changes (blocking, on its own
-// thread: the registry session lives there) and composites every other process's window (hildon-port.md 7.48): by GPU share
+// thread: the registry session lives there) and composites every other process's window: by GPU share
 // token, or else the bitmap duplicated by its FBSERV handle and its pixels copied out.
 #include <fbs.h>
 #include "phewinreg.h"
@@ -63,7 +63,7 @@ struct PheFrameWin { int iId, iX, iY, iW, iH, iToken; unsigned char* iPx; int iP
 
 // every other process's visible window now, in registration order (at most aMax), each subscribed as composited by this process
 // (EPheWinComposite: its owner keeps it off the window server's screen). Runs on the main loop, over the backend's registry session
-// (its events say when to call it again: hildon-port.md 7.49). Returns the count, or an error
+// (its events say when to call it again). Returns the count, or an error
 extern "C" int phe_clws_reg_list(void* aBuf, int aBytes);
 extern "C" int phe_clws_reg_subscribe(int aId, int aMode);
 extern "C" int phe_frame_list(PheFrameWin* aOut, int aMax)
@@ -167,7 +167,7 @@ extern "C" int phe_cmd_has(const char* aWord)
 	return cmd.Find(w) >= 0;
 	}
 
-// ======================================================================== the owner side of the backend (hildon-port.md 7.64)
+// ======================================================================== the owner side of the backend
 // "cluttertest|owner" runs a resizable 400x300 stage (minimum 200x150) and starts "cluttertest ownercheck", which plays a frame
 // with the registry API only: it finds the stage's window, checks the hints the backend set, sends a resize (clamped by the
 // registry) and expects the backend's Update with the new size, pings and expects the main loop's pong, and sends focus.
@@ -234,7 +234,7 @@ static TInt OwnerCheck()
 	return KErrNone;
 	}
 
-// ======================================================================== decorations' registry access (hildon-port.md 7.66 / 7.68)
+// ======================================================================== decorations' registry access
 // The frame's decorations (phedecor.c) read the same registry session as the frame's compositing (phe_clws.cpp gReg): each
 // listed window's title, type, state and geometry, its hints (fixed size?) and the ping state; and send the buttons' actions.
 extern RPheWinReg gReg;
@@ -286,7 +286,7 @@ extern "C" void phe_decor_kill(int aId)
 			RProcess p;
 			if (p.Open(TProcessId(list[i].iOwner)) == KErrNone)
 				{
-				// a classic app's window is published by phescreenpub (hildon-port.md 7.51.18): the owner is the publisher, not the
+				// a classic app's window is published by phescreenpub: the owner is the publisher, not the
 				// app. The close action makes the publisher end the app (EndTask, then a kill after its 10 s grace time).
 				if (p.FileName().FindF(_L("phescreenpub")) >= 0)
 					{

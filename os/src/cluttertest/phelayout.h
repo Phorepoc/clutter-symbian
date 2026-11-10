@@ -1,7 +1,7 @@
 /* Copyright The Phorepoc Authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * phelayout.h -- the frame's window placement interface (hildon-port.md 7.51.17). See phelayout.c.
+ * phelayout.h -- the frame's window placement interface. See phelayout.c.
  */
 #ifndef PHELAYOUT_H
 #define PHELAYOUT_H

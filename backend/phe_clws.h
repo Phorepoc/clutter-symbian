@@ -11,11 +11,11 @@ extern "C" {
 /* event types */
 enum { PHE_CLWS_NONE = 0, PHE_CLWS_KEY_DOWN = 1, PHE_CLWS_KEY = 2, PHE_CLWS_KEY_UP = 3, PHE_CLWS_POINTER = 4, PHE_CLWS_REDRAW = 5, PHE_CLWS_SCREEN_CHANGED = 6,
        PHE_CLWS_FOCUS_IN = 7, PHE_CLWS_FOCUS_OUT = 8,
-       PHE_CLWS_WATCHERS = 9 /* a subscription to one of our registry windows changed: x = the owner's subscription serial (C4, 7.48) */,
-       PHE_CLWS_REG_CHANGED = 10 /* a compositor: the registry changed (list it again); x = the serial (7.49) */,
-       PHE_CLWS_REG_CONTENT = 11 /* a compositor: a GPU window published its next frame (redraw); x = the content tick (7.49) */,
+       PHE_CLWS_WATCHERS = 9 /* a subscription to one of our registry windows changed: x = the owner's subscription serial */,
+       PHE_CLWS_REG_CHANGED = 10 /* a compositor: the registry changed (list it again); x = the serial */,
+       PHE_CLWS_REG_CONTENT = 11 /* a compositor: a GPU window published its next frame (redraw); x = the content tick */,
        PHE_CLWS_REG_ACTION = 12 /* an owner: a frame's action on one of our registry windows: x = the window id, y = TPheWinAction / EPheWinActResize
-                                   (pings never arrive: phe_clws answers them itself, on the main loop, hildon-port.md 7.64) */ };
+                                   (pings never arrive: phe_clws answers them itself, on the main loop) */ };
 /* pointer types = TPointerEvent::TType: 0 button1 down, 1 button1 up, 2 button2 down, 3 up, 4 button3 down, 5 up, 6 drag, 7 move */
 typedef struct {
   int type;
@@ -46,19 +46,19 @@ int  phe_clws_poll (PheClwsPollFD *fds, unsigned nfds, int timeout);   /* the GM
 void phe_clws_set_inner_poll (PheClwsPollFunc inner);       /* GLib's own poll (g_poll), used by the helper thread for the real descriptors */
 void phe_clws_log (const char *msg);
 
-/* the window registry (hildon-ui phewinreg, hildon-port.md C4): a stage's metadata and content for the frame process.
+/* the window registry (hildon-ui phewinreg): a stage's metadata and content for the frame process.
    type = TPheWinType, state = EPheWin* flags of phewinreg.h. reg_window returns the id (> 0) or an error (< 0: no registry).
    reg_content copies w x h premultiplied BGRA pixels (stride bytes per row) into the window's shared bitmap and returns
    the number of watchers (0: nobody imports it, the caller may skip copying until one appears) or an error. */
 int phe_clws_reg_window (const char *title, int type, int x, int y, int w, int h, unsigned state);
 int phe_clws_reg_update (int id, const char *title, int type, int x, int y, int w, int h, unsigned state);
 int phe_clws_reg_content (int id, int w, int h, const void *pixels, int stride, int dx, int dy, int dw, int dh);
-/* the GPU path (hildon-port.md 7.47): the content is the exported texture `token` (EGL_SYMBIAN_SVGA_SHARE_PH) of w x h */
+/* the GPU path: the content is the exported texture `token` (EGL_SYMBIAN_SVGA_SHARE_PH) of w x h */
 int phe_clws_reg_content_gpu (int id, int token, int w, int h, int dx, int dy, int dw, int dh);
 void phe_clws_reg_remove (int id);
-/* window id's subscriptions now (hildon-port.md 7.48): frame processes subscribed, and how many of them composite it; KErrNotFound or another error */
+/* window id's subscriptions now: frame processes subscribed, and how many of them composite it; KErrNotFound or another error */
 int phe_clws_reg_subs (int id, int *subscribers, int *composited);
-/* a compositor (7.49): start the registry events (PHE_CLWS_REG_CHANGED / _CONTENT); the list; a subscription (TPheWinSubscription) */
+/* a compositor: start the registry events (PHE_CLWS_REG_CHANGED / _CONTENT); the list; a subscription (TPheWinSubscription) */
 int phe_clws_frame_watch (void);
 int phe_clws_reg_list (void *buf, int bytes);
 int phe_clws_reg_subscribe (int id, int mode);

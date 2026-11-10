@@ -1,4 +1,4 @@
-/* cluttertest_main.c -- the Clutter feasibility test (docs hildon-port.md 7.33). BSD-2-Clause (Phorepoc).
+/* cluttertest_main.c -- the Clutter feasibility test. BSD-2-Clause (Phorepoc).
  * One full-screen stage (the "symbian" backend's own window; presses move the turning actor, keys are logged, arrows move it), a textured actor rotating around its centre, a second textured actor with a ClutterBlurEffect (the offscreen + GLSL path hildon-desktop's task switcher uses), both turning for good;
  * every two seconds "[cluttertest] N frames in T ms = F fps" (frames counted at the stage's after-paint). CLUTTER_UNCAPPED: the master clock runs as fast as it can (frame rate 1000). */
 #include <stdio.h>
@@ -202,7 +202,7 @@ on_activate (ClutterActor *stage, gpointer data)
 extern void phe_clws_screen_size (int *w, int *h);
 
 /* ======================================================================== the frame side of the registry test (C4, "cluttertest frame")
- * a small compositor (hildon-port.md 7.48/7.49): the registry's events reach the main loop (the backend's wait set); a change lists
+ * a small compositor: the registry's events reach the main loop (the backend's wait set); a change lists
  * the windows again (phe_frame_list, cluttertest.cpp: it subscribes to every other process's window as its compositor), a content tick
  * is a redraw. The main loop draws the windows on
  * this process's own FULL-SCREEN stage, at their geometry, in registration order: a window with a GPU share token is its exported
@@ -240,7 +240,7 @@ static gint64 frame_t0;
 extern int phe_clws_reg_pointer (int id, int type, int x, int y);
 
 /* a click on a bitmap window goes to its owner in the window's content pixels (TRawEvent EButton1Down 10 / EButton1Up 11 /
- * EPointerMove 1): a classic app's screen shown as a window takes the click as its own digitiser's (hildon-port.md 7.51 (d)) */
+ * EPointerMove 1): a classic app's screen shown as a window takes the click as its own digitiser's */
 static gboolean
 frame_button (ClutterActor *actor, ClutterEvent *event, gpointer data)
 {
@@ -424,16 +424,16 @@ frame_show (gpointer data)
   return G_SOURCE_REMOVE;
 }
 
-/* the registry's events, on the main loop (no helper thread, hildon-port.md 7.49): a change = list again; a content tick = one
+/* the registry's events, on the main loop (no helper thread): a change = list again; a content tick = one
    redraw request (Clutter coalesces them into the next master-clock frame) */
 static int frame_relists, frame_ticks;
-/* per-phase timers of a compositor frame (hildon-port.md 7.52): first content tick -> the master clock's pre-paint (clock latency),
+/* per-phase timers of a compositor frame: first content tick -> the master clock's pre-paint (clock latency),
    pre-paint -> stage paint (the stage update: events, relayout), paint -> after-paint (painting), after-paint -> post-paint (the swap
    and the rest of the update), post-paint -> next pre-paint (idle) */
 static gint64 frame_tick_first, frame_pre, frame_post, frame_after;
 static gint64 frame_sum_lat, frame_sum_upd, frame_sum_swap, frame_sum_idle;
 static int frame_lat_n;
-extern gint64 phe_cogl_swap_enter_us, phe_cogl_swap_sum_us;   /* the Cogl overlay's swap timing (7.53) */
+extern gint64 phe_cogl_swap_enter_us, phe_cogl_swap_sum_us;   /* the Cogl overlay's swap timing */
 static gint64 frame_sum_flush, frame_sum_eglswap, frame_swap0, frame_cpu_after, frame_sum_cpu;
 extern long long phe_clws_thread_cpu_us (void);
 extern unsigned phe_clws_fast_ticks (void);
@@ -470,7 +470,7 @@ phe_frame_relist (void)
    window is composited) */
 static gint64 frame_paint_start, frame_paint_sum, frame_wait0;
 static int frame_painted;
-extern unsigned long long phe_clws_wait_us;   /* the backend's time blocked in its wait set (7.50) */
+extern unsigned long long phe_clws_wait_us;   /* the backend's time blocked in its wait set */
 static void
 frame_paint (ClutterActor *stage, gpointer data)
 {
@@ -608,7 +608,7 @@ phe_clutter_main (void)
   clutter_stage_set_title (CLUTTER_STAGE (stage), "cluttertest");
   if (phe_cmd_has ("owner"))
     {
-      /* the owner-side test (hildon-port.md 7.64): a resizable window, not full screen; a second process plays the frame */
+      /* the owner-side test: a resizable window, not full screen; a second process plays the frame */
       clutter_stage_set_user_resizable (CLUTTER_STAGE (stage), TRUE);
       clutter_stage_set_minimum_size (CLUTTER_STAGE (stage), 200, 150);
       clutter_actor_set_size (stage, 400, 300);

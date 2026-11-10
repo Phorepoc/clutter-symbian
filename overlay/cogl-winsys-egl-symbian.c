@@ -49,7 +49,7 @@ typedef struct _CoglOnscreenSymbian
 {
   void *window;                /* the RWindow of this onscreen */
   CoglBool visible;            /* as the application asked */
-  CoglBool composited;         /* a frame process composites this window from its exported texture (hildon-port.md 7.48): the window stays
+  CoglBool composited;         /* a frame process composites this window from its exported texture: the window stays
                                   off the window server's screen and a swap presents nothing (the frame was published after the paint) */
 } CoglOnscreenSymbian;
 
@@ -275,7 +275,7 @@ cogl_symbian_onscreen_set_composited (CoglOnscreen *onscreen, CoglBool composite
 
 /* composited: no present. The paint is in the back buffer, and the frame was copied out after the paint; without a swap the next
    frame draws over the same buffer (Clutter redraws whole frames here: no buffer age, no swap region) */
-/* for the compositor's bounded frame profile (hildon-port.md 7.53): when the last winsys swap began (after Cogl flushed the
+/* for the compositor's bounded frame profile: when the last winsys swap began (after Cogl flushed the
    framebuffer's journal) and the total time inside the EGL swap */
 gint64 phe_cogl_swap_enter_us, phe_cogl_swap_sum_us;
 

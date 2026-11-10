@@ -1,7 +1,7 @@
 /* Copyright The Phorepoc Authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * phelayout.c -- the frame's window placement modes (hildon-port.md 7.51.17).
+ * phelayout.c -- the frame's window placement modes.
  *
  * The frame (frame_show) and its decorations (phedecor.c) ask this module where a window goes. In the FREE mode (the default)
  * the module places nothing: windows keep their own geometry and the decorations' scale-to-fit. In the SPLIT mode two windows

@@ -1,7 +1,7 @@
 /* Copyright The Phorepoc Authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * phedecor.c -- the frame's window decorations (hildon-port.md C5, design 7.66): a title bar with minimise / maximise / close
+ * phedecor.c -- the frame's window decorations: a title bar with minimise / maximise / close
  * buttons over each composited window, drawn as Clutter actors from the window registry's data (title, type, state, size hints,
  * ping state), in the Etesian tokens of phehildon.rc (title bar #3A3A3A, focused #1C51AF, 44 px touch targets). The buttons send
  * the registry's actions to the window's owner; a title-bar press focuses and raises the window. The frame pings every decorated
@@ -102,7 +102,7 @@ phe_decor_scale (int id, int w, int h)
 }
 
 /* the frame's compositing: where window id's content goes (w x h = its size): PHE_PLACE_FREE (own geometry, phe_decor_content_y +
- * phe_decor_scale), PHE_PLACE_SET (*x, *y top-left, *k scale) or PHE_PLACE_HIDDEN (phelayout, hildon-port.md 7.51.17) */
+ * phe_decor_scale), PHE_PLACE_SET (*x, *y top-left, *k scale) or PHE_PLACE_HIDDEN (phelayout) */
 int
 phe_decor_place (int id, int w, int h, float *x, float *y, float *k)
 {
@@ -735,7 +735,7 @@ clutter_actor_get_child_index_ (ClutterActor *a)
   return -1;
 }
 
-/* the first presses on the stage: which actor Clutter's pick gave each one (input checks, hildon-port.md 7.85) */
+/* the first presses on the stage: which actor Clutter's pick gave each one (input checks) */
 static gboolean
 on_captured (ClutterActor *actor, ClutterEvent *event, gpointer data)
 {
@@ -750,7 +750,7 @@ on_captured (ClutterActor *actor, ClutterEvent *event, gpointer data)
       if (n < 40)
         LOG ("[phedecor] press at %.0f,%.0f -> %s '%s'", x, y, src ? G_OBJECT_TYPE_NAME (src) : "-",
              src && clutter_actor_get_name (src) ? clutter_actor_get_name (src) : "");
-      /* the handles by geometry: the topmost shown handle under the point (QEMU's softpipe pick misses them, hildon-port.md 7.85) */
+      /* the handles by geometry: the topmost shown handle under the point (a check on the pick) */
       for (l = decors; l; l = l->next)
         {
           Decor *d = l->data;
@@ -781,13 +781,9 @@ on_captured (ClutterActor *actor, ClutterEvent *event, gpointer data)
                again && clutter_actor_get_name (again) ? clutter_actor_get_name (again) : "");
         }
       n++;
-      /* the pick's own answer wins when it is the handle or something stacked above it (a window on top) */
+      /* a check only: the pick should give the handle unless something stacked above it (a window on top) has the point */
       if (hit && src != hit && (top == NULL || top == stage || clutter_actor_get_child_index_ (hit) > clutter_actor_get_child_index_ (top)))
-        {
-          LOG ("[phedecor]   press goes to %s (pick gave %s)", clutter_actor_get_name (hit), src ? G_OBJECT_TYPE_NAME (src) : "-");
-          on_grip_press (hit, event, NULL);
-          return CLUTTER_EVENT_STOP;
-        }
+        LOG ("[phedecor]   PICK MISSED %s (gave %s)", clutter_actor_get_name (hit), src ? G_OBJECT_TYPE_NAME (src) : "-");
     }
   return CLUTTER_EVENT_PROPAGATE;
 }
