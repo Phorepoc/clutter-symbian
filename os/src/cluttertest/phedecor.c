@@ -29,6 +29,7 @@ extern int phe_decor_resize (int id, int x, int y, int w, int h);
 extern void phe_decor_kill (int id);
 extern void phe_log (const char *msg);
 extern void phe_frame_relist (void);
+extern void phe_frame_raise (int id);
 extern void (*clutter_symbian_decor_hook) (int content);
 
 enum { ACT_CLOSE = 1, ACT_MINIMISE = 2, ACT_MAXIMISE = 3, ACT_FOCUS = 4, ACT_RAISE = 5 };
@@ -707,6 +708,32 @@ refresh (void)
           decors = g_list_delete_link (decors, l);
         }
     }
+  {
+    /* stacking: each plain window's content, then its bar and handles, window by window; the focused window last
+       (on top), so another window's bar never covers it (an undecorated plain window, e.g. untitled, stacks the same way) */
+    int pass;
+    for (pass = 0; pass < 2; pass++)
+      for (i = 0; i < n; i++)
+        {
+          Decor *d;
+          if (((w[i].state & ST_FOCUSED) != 0) != (pass == 1) || (w[i].state & ST_FULLSCREEN)
+              || (w[i].type != TYPE_NORMAL && w[i].type != TYPE_DIALOG))
+            continue;
+          phe_frame_raise (w[i].id);
+          if (!(d = decor_of (w[i].id)) || !d->seen)
+            continue;
+          clutter_actor_set_child_above_sibling (stage, d->bar, NULL);
+          clutter_actor_set_child_above_sibling (stage, d->grip, NULL);
+          clutter_actor_set_child_above_sibling (stage, d->eright, NULL);
+          clutter_actor_set_child_above_sibling (stage, d->ebottom, NULL);
+        }
+    /* the other window types that are not full screen (menus, notifications, splash) stay above the plain windows */
+    for (i = 0; i < n; i++)
+      if (w[i].type != TYPE_NORMAL && w[i].type != TYPE_DIALOG && !(w[i].state & ST_FULLSCREEN))
+        phe_frame_raise (w[i].id);
+    if (grip_outline)
+      clutter_actor_set_child_above_sibling (stage, grip_outline, NULL);
+  }
   phe_panel_refresh ();                     /* the frame's panel stays above every window and bar (phepanel.c) */
 }
 

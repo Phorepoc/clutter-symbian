@@ -294,6 +294,21 @@ frame_win (int id)
   return f;
 }
 
+/* phedecor's stacking: a window's content above everything shown so far (its bar and handles follow it) */
+void
+phe_frame_raise (int id)
+{
+  GList *l;
+  for (l = frame_wins; l; l = l->next)
+    {
+      FrameWin *f = l->data;
+      if (f->id != id)
+        continue;
+      clutter_actor_set_child_above_sibling (frame_stage, f->gpu, NULL);
+      clutter_actor_set_child_above_sibling (frame_stage, f->bmp, NULL);
+    }
+}
+
 static void
 frame_win_free (FrameWin *f)
 {
